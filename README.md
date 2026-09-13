@@ -40,3 +40,13 @@ go build ./cmd/agentops
 
 See [Service operations](docs/service-operations.md) for the configuration and
 command reference.
+
+## Releases
+
+Pushing a semantic version tag such as `v1.0.0` runs the release workflow. It
+tests the module, builds macOS and Linux binaries for AMD64 and ARM64, publishes
+the binaries and checksums to this repository's GitHub Release, and updates
+`Formula/agentops.rb` in `wenqiangde/homebrew-agentsetup`.
+
+The repository requires a `HOMEBREW_TAP_TOKEN` Actions secret with permission
+to update the Homebrew tap repository.

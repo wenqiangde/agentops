@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_REPO: wenqiangde/homebrew-agentsetup
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build release assets
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-dist
+          for platform in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+            goos="${platform%/*}"
+            goarch="${platform#*/}"
+            name="agentops-${VERSION}-${goos}-${goarch}"
+            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build \
+              -trimpath \
+              -ldflags "-s -w" \
+              -o "release-dist/${name}" \
+              ./cmd/agentops
+          done
+          (cd release-dist && sha256sum agentops-* > checksums.txt)
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" release-dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "AgentOps ${GITHUB_REF_NAME}" \
+            --generate-notes
+
+      - name: Require Homebrew tap token
+        run: |
+          if [[ -z "${HOMEBREW_TAP_TOKEN}" ]]; then
+            echo "HOMEBREW_TAP_TOKEN is required to update ${HOMEBREW_TAP_REPO}." >&2
+            exit 1
+          fi
+
+      - name: Update Homebrew formula
+        env:
+          GH_TOKEN: ${{ env.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh repo clone "${HOMEBREW_TAP_REPO}" tap-repo
+          git -C tap-repo remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git"
+          scripts/generate-homebrew-formula.sh \
+            --version "${GITHUB_REF_NAME}" \
+            --checksums release-dist/checksums.txt \
+            --out tap-repo/Formula/agentops.rb
+          ruby -c tap-repo/Formula/agentops.rb
+          if [[ -n "$(git -C tap-repo status --short Formula/agentops.rb)" ]]; then
+            git -C tap-repo config user.name "github-actions[bot]"
+            git -C tap-repo config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git -C tap-repo add Formula/agentops.rb
+            git -C tap-repo commit -m "agentops ${GITHUB_REF_NAME#v}"
+            git -C tap-repo push origin main
+          fi
