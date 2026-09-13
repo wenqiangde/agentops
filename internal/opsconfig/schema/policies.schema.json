@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "execution", "production", "releases", "backups"],
+  "properties": {
+    "version": {"const": 1},
+    "execution": {
+      "type": "object", "additionalProperties": false,
+      "required": ["defaultTimeout", "healthTimeout", "batchConcurrency"],
+      "properties": {
+        "defaultTimeout": {
+          "type": "string",
+          "pattern": "^(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?:ns|us|ms|s|m|h)(?:(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?:ns|us|ms|s|m|h))*$",
+          "not": {"pattern": "^(?:0+(?:\\.0+)?|\\.0+)(?:ns|us|ms|s|m|h)(?:(?:0+(?:\\.0+)?|\\.0+)(?:ns|us|ms|s|m|h))*$"}
+        },
+        "healthTimeout": {
+          "type": "string",
+          "pattern": "^(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?:ns|us|ms|s|m|h)(?:(?:[0-9]+(?:\\.[0-9]+)?|\\.[0-9]+)(?:ns|us|ms|s|m|h))*$",
+          "not": {"pattern": "^(?:0+(?:\\.0+)?|\\.0+)(?:ns|us|ms|s|m|h)(?:(?:0+(?:\\.0+)?|\\.0+)(?:ns|us|ms|s|m|h))*$"}
+        },
+        "batchConcurrency": {"const": 1}
+      }
+    },
+    "production": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requirePreviewDigest", "requireCleanArtifactManifest"],
+      "properties": {
+        "requirePreviewDigest": {"const": true},
+        "requireCleanArtifactManifest": {"const": true}
+      }
+    },
+    "releases": {
+      "type": "object", "additionalProperties": false, "required": ["retain"],
+      "properties": {"retain": {"type": "integer", "minimum": 1}}
+    },
+    "backups": {
+      "type": "object", "additionalProperties": false,
+      "required": ["serverCopies", "localCopies", "requireEncryption"],
+      "properties": {
+        "serverCopies": {"type": "integer", "minimum": 1},
+        "localCopies": {"type": "integer", "minimum": 1},
+        "requireEncryption": {"const": true}
+      }
+    }
+  }
+}

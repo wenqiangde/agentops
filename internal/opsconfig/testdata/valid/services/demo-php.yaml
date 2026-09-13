@@ -1,0 +1,23 @@
+version: 1
+id: demo-php
+language: php
+source:
+  path: /Users/example/workspace/DemoPHP
+  repository: git@example.com:demo-php.git
+build:
+  adapter: command
+  command: ./scripts/build.sh
+  artifact: dist/demo-php.tar.gz
+  manifest: dist/demo-php.manifest.json
+environments:
+  local:
+    kind: local
+    runner: manual
+  production:
+    kind: ssh
+    host: prod-demo
+    root: /opt/apps/demo-php
+    runner: php-fpm
+    service: php8.3-fpm.service
+    configOwner: www-data
+    configPath: /lib/systemd/system/php8.3-fpm.service

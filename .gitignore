@@ -1,0 +1,6 @@
+.DS_Store
+*.agent-setup-backup-*
+user/
+AGENTS.md
+/packages/
+/sources/

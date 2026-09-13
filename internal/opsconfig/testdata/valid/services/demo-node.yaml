@@ -1,0 +1,23 @@
+version: 1
+id: demo-node
+language: node
+source:
+  path: /Users/example/workspace/DemoNode
+  repository: git@example.com:demo-node.git
+build:
+  adapter: command
+  command: ./scripts/build.sh
+  artifact: dist/demo-node.tar.gz
+  manifest: dist/demo-node.manifest.json
+environments:
+  local:
+    kind: local
+    runner: manual
+  production:
+    kind: ssh
+    host: prod-demo
+    root: /opt/apps/demo-node
+    runner: pm2
+    app: demo-node
+    configOwner: node_app
+    configPath: /opt/apps/demo-node/ecosystem.config.js

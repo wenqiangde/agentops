@@ -1,0 +1,14 @@
+version: 1
+execution:
+  defaultTimeout: 30s
+  healthTimeout: 10s
+  batchConcurrency: 1
+production:
+  requirePreviewDigest: true
+  requireCleanArtifactManifest: true
+releases:
+  retain: 3
+backups:
+  serverCopies: 1
+  localCopies: 7
+  requireEncryption: true

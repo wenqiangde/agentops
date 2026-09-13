@@ -1,0 +1,6 @@
+version: 1
+hosts:
+  prod-demo:
+    sshAlias: prod-demo
+    platform: ubuntu
+    architecture: amd64

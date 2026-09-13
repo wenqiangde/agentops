@@ -1,0 +1,20 @@
+version: 1
+id: healthy-api
+language: go
+source:
+  path: /Users/example/workspace/Demo
+  repository: git@example.com:healthy.git
+build:
+  adapter: command
+  command: ./scripts/build.sh
+  artifact: dist/healthy.tar.gz
+  manifest: dist/healthy.manifest.json
+environments:
+  local:
+    kind: local
+    runner: manual
+  production:
+    kind: ssh
+    host: prod-demo
+    root: /opt/apps/healthy-api
+    runner: manual

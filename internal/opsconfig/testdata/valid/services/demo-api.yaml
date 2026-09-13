@@ -1,0 +1,42 @@
+version: 1
+id: demo-api
+language: go
+source:
+  path: /Users/example/workspace/Demo
+  repository: git@example.com:demo.git
+build:
+  adapter: command
+  command: ./scripts/build.sh
+  artifact: dist/demo-api.tar.gz
+  manifest: dist/demo-api.manifest.json
+environments:
+  local:
+    kind: local
+    runner: process
+    user: deploy
+    command: /tmp/bin/demo-api
+    pidfile: /tmp/demo-api.pid
+    shutdownSignal: SIGTERM
+    logs: /tmp/demo-api.log
+  production:
+    kind: ssh
+    host: prod-demo
+    root: /opt/apps/demo-api
+    runner: systemd
+    unit: demo-api.service
+    config:
+      files:
+        - shared/config/app.env
+      requiredKeys:
+        - DATABASE_URL
+      secretKeys:
+        - DATABASE_PASSWORD
+    health:
+      type: http
+      url: http://127.0.0.1:8080/health
+      successStatuses: [200]
+futureResources:
+  redis:
+    status: planned
+    intendedRoles:
+      - rate-limit

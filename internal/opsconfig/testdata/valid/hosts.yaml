@@ -1,0 +1,10 @@
+version: 1
+hosts:
+  prod-demo:
+    sshAlias: prod-demo
+    platform: ubuntu
+    architecture: amd64
+    capabilities:
+      - systemd
+      - php-fpm
+      - pm2
