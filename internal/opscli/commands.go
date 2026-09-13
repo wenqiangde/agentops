@@ -41,11 +41,7 @@ func RunWithPaths(p paths.Paths, args []string, stdout io.Writer, stderr io.Writ
 }
 
 func opsMainWithPaths(p paths.Paths, args []string, stdout io.Writer, stderr io.Writer) int {
-	if len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h") {
-		fmt.Fprintln(stdout, agentOpsUsage)
-		return 0
-	}
-	return opsCommand(p, args, stdout, opsUsageWriter{Writer: stderr, usage: agentOpsUsage})
+	return executeAgentOpsCommand(p, args, stdout, stderr)
 }
 
 func opsCommand(p paths.Paths, args []string, stdout io.Writer, stderr io.Writer) int {

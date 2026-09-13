@@ -38,8 +38,26 @@ go test ./...
 go build ./cmd/agentops
 ```
 
+## CLI
+
+AgentOps uses Cobra for its independent command tree. Use the standard help,
+version, and completion commands to inspect an installation:
+
+```bash
+agentops help
+agentops help deploy
+agentops version
+agentops --version
+agentops completion zsh
+```
+
+Source builds report the `source` channel. Release builds report the release
+tag, commit, build date, and `github-release` channel injected by CI.
+
 See [Service operations](docs/service-operations.md) for the configuration and
-command reference.
+command reference. See the
+[dependency adoption roadmap](docs/dependency-adoption-roadmap.md) for the
+approved dependency order and stage gates.
 
 ## Releases
 

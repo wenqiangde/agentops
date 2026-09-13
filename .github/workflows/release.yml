@@ -29,8 +29,10 @@ jobs:
       - name: Build release assets
         env:
           VERSION: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
         run: |
           set -euo pipefail
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           mkdir -p release-dist
           for platform in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
             goos="${platform%/*}"
@@ -38,7 +40,7 @@ jobs:
             name="agentops-${VERSION}-${goos}-${goarch}"
             GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build \
               -trimpath \
-              -ldflags "-s -w" \
+              -ldflags "-s -w -X github.com/wenqiangde/agentops/internal/opscli.version=${VERSION} -X github.com/wenqiangde/agentops/internal/opscli.commit=${COMMIT} -X github.com/wenqiangde/agentops/internal/opscli.date=${BUILD_DATE} -X github.com/wenqiangde/agentops/internal/opscli.channel=github-release" \
               -o "release-dist/${name}" \
               ./cmd/agentops
           done

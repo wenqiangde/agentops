@@ -81,7 +81,8 @@ class Agentops < Formula
   end
 
   test do
-    assert_match "Usage: agentops", shell_output("#{bin}/agentops --help")
+    assert_match "Available Commands:", shell_output("#{bin}/agentops --help")
+    assert_match "AgentOps Version", shell_output("#{bin}/agentops version")
   end
 end
 RUBY

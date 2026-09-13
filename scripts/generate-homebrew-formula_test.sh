@@ -18,4 +18,5 @@ grep -q '^class Agentops < Formula' "$TMP/agentops.rb"
 grep -q 'github.com/wenqiangde/agentops/releases/download/v1.2.3' "$TMP/agentops.rb"
 grep -q 'agentops-v1.2.3-darwin-arm64' "$TMP/agentops.rb"
 grep -q 'bin.install.*=> "agentops"' "$TMP/agentops.rb"
+grep -q 'AgentOps Version.*shell_output.*agentops version' "$TMP/agentops.rb"
 ruby -c "$TMP/agentops.rb" >/dev/null
