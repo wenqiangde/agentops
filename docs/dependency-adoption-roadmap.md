@@ -26,7 +26,7 @@ entry condition and acceptance criteria are satisfied.
 
 ## Stage 1: Standard CLI Contract
 
-**Status:** awaiting verification
+**Status:** complete
 
 **Dependency:** `github.com/spf13/cobra`
 
@@ -196,7 +196,7 @@ changes, production operations, publication, or cross-project synchronization.
 
 - Stage: `Stage 1: Standard CLI Contract`
 - Authority: user authorization in the AgentSetup maintenance workspace
-- Current state: `awaiting_verification`
+- Current state: `complete`
 - Allowed scope: top-level CLI routing, build metadata, release linker flags,
   Homebrew formula verification, tests, and directly affected documentation
 - Excluded scope: operational handlers, safety policy, configuration schema,
@@ -207,8 +207,14 @@ changes, production operations, publication, or cross-project synchronization.
 - Verified evidence: focused tests failed before implementation; `go test
   ./...`, `go vet ./...`, Formula generation tests, four release-target builds,
   injected metadata output, command help, and Bash/Zsh/Fish completion passed
-- Remaining acceptance: commit and publish `v1.1.0`, update the Homebrew tap,
-  install the released binary, and verify its tag, commit, build date, channel,
-  Help, Version, and completion output
-- Next action: perform commit and release preparation after explicit publication
-  authorization
+- Release evidence: AgentOps `v1.1.0` published from commit `6c0c71c`; the
+  Homebrew tap updated to Formula commit `1eca941`; Homebrew upgraded the local
+  binary from `1.0.0` to `1.1.0`
+- Installed verification: `agentops version` and `agentops --version` reported
+  `v1.1.0`, commit `6c0c71cfd8d17a7ef3259b5bb566259ed5448cd3`, build
+  date `2026-09-13T11:29:52Z`, and channel `github-release`; root help,
+  deploy help, Bash/Zsh/Fish completion, inventory validation, service listing,
+  and the Homebrew Formula test passed
+- Remaining acceptance: none for Stage 1
+- Next action: keep Stage 2 deferred until a real semantic-version comparison
+  policy is approved
