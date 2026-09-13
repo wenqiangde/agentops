@@ -64,7 +64,7 @@ approved dependency order and stage gates.
 Pushing a semantic version tag such as `v1.0.0` runs the release workflow. It
 tests the module, builds macOS and Linux binaries for AMD64 and ARM64, publishes
 the binaries and checksums to this repository's GitHub Release, and updates
-`Formula/agentops.rb` in `wenqiangde/homebrew-agentsetup`.
+`Formula/agentops.rb` in `wenqiangde/homebrew-agent-tools`.
 
 The repository requires a `HOMEBREW_TAP_TOKEN` Actions secret with permission
 to update the Homebrew tap repository.

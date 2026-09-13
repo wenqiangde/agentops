@@ -6,7 +6,7 @@ daemon, discover credentials, provision infrastructure, manage containers, or
 replace a full deployment platform.
 
 ```bash
-brew install wenqiangde/agentsetup/agentops
+brew install wenqiangde/agent-tools/agentops
 ```
 
 This installation command becomes available after the first AgentOps release.

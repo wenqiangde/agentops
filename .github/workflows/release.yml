@@ -12,7 +12,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      HOMEBREW_TAP_REPO: wenqiangde/homebrew-agentsetup
+      HOMEBREW_TAP_REPO: wenqiangde/homebrew-agent-tools
       HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
       - name: Checkout
