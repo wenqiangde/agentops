@@ -76,6 +76,27 @@ func TestInspectAcceptsInternalWranglerSymlink(t *testing.T) {
 	}
 }
 
+func TestInspectRejectsWranglerConfigPathsOutsideSource(t *testing.T) {
+	for _, config := range []string{
+		`{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","main":"/tmp/worker.js"}`,
+		`{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","assets":{"directory":"../public"}}`,
+	} {
+		root := newCloudflareProject(t)
+		writeFile(t, filepath.Join(root, "wrangler.jsonc"), config, 0o644)
+		executor := &recordingExecutor{}
+		_, err := opscloudflare.Inspect(context.Background(), executor, opscloudflare.Request{
+			SourcePath: root, Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
+			WranglerConfig: "wrangler.jsonc", Timeout: 5 * time.Second,
+		})
+		if err == nil {
+			t.Fatalf("unsafe config was accepted: %s", config)
+		}
+		if len(executor.requests) != 0 {
+			t.Fatalf("unsafe config executed commands: %+v", executor.requests)
+		}
+	}
+}
+
 func TestInspectRejectsWrongAccountAndConfigIdentity(t *testing.T) {
 	tests := []struct {
 		name      string

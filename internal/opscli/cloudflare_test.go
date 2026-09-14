@@ -299,6 +299,35 @@ func TestOpsDeployRejectsScopedDriftAfterConfirmationDryRun(t *testing.T) {
 	}
 }
 
+func TestOpsDeployRejectsSnapshotDriftAfterConfirmationDryRun(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+	args := []string{"ops", "deploy", "example-relay", "--environment", "production", "--version", "2026.09.14-1"}
+	previewExecutor := successfulCLICloudflareExecutor()
+	stubCLICloudflareExecutor(t, previewExecutor)
+	var preview, previewErr bytes.Buffer
+	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
+		t.Fatalf("preview code=%d err=%q", code, previewErr.String())
+	}
+	confirmedExecutor := successfulCLICloudflareExecutor()
+	confirmedExecutor.afterRun = func(request opsexec.Request) {
+		if len(request.Args) > 1 && request.Args[0] == "deploy" && request.Args[1] == "--dry-run" {
+			writeCLIFile(t, filepath.Join(request.Directory, "src", "index.ts"), "snapshot changed\n", 0o644)
+			confirmedExecutor.afterRun = nil
+		}
+	}
+	stubCLICloudflareExecutor(t, confirmedExecutor)
+	var stdout, stderr bytes.Buffer
+	confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
+	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "stale") {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
+	}
+	if hasCloudflareProductionDeploy(confirmedExecutor.requests) {
+		t.Fatalf("changed snapshot executed production deploy: %+v", confirmedExecutor.requests)
+	}
+}
+
 func TestOpsDeployWritesFailureReportWhenPostDeployIdentityLookupFails(t *testing.T) {
 	p := opsTestPaths(t, "valid")
 	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
@@ -358,8 +387,44 @@ func TestOpsDeployUsesEmergencyReportWhenPrimaryReportRootIsUnavailable(t *testi
 	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "emergency-reports") {
 		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
 	}
-	fallback := filepath.Join(filepath.Dir(p.OpsReportRoot), "emergency-reports")
+	fallback := emergencyReportRoot(t, filepath.Dir(p.OpsReportRoot))
 	_ = readOnlyCloudflareReport(t, fallback)
+}
+
+func TestCloudflareEmergencyReportIgnoresPreexistingSymlinkDirectory(t *testing.T) {
+	root := t.TempDir()
+	primary := filepath.Join(root, "reports")
+	if err := os.WriteFile(primary, []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	external := t.TempDir()
+	if err := os.Symlink(external, filepath.Join(root, "emergency-reports")); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	report := opsreport.Report{
+		OperationID: "cloudflare-test", Actor: "actor", Service: "service", Environment: "production", Host: "worker",
+		PlanDigest: strings.Repeat("1", 64), RequestedVersion: "version", ArtifactDigest: strings.Repeat("2", 64),
+		Steps:     []opsreport.StepResult{{Order: 1, Kind: "test", Status: "failed", StartedAt: now, FinishedAt: now}},
+		StartedAt: now, FinishedAt: now, Terminal: true,
+	}
+	path, err := writeCloudflareReport(primary, report)
+	if err != nil || strings.HasPrefix(path, external+string(filepath.Separator)) {
+		t.Fatalf("path=%q err=%v", path, err)
+	}
+	entries, err := os.ReadDir(external)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("external entries=%v err=%v", entries, err)
+	}
+}
+
+func emergencyReportRoot(t *testing.T, parent string) string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(parent, "emergency-reports-*"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("emergency report roots=%v err=%v", matches, err)
+	}
+	return matches[0]
 }
 
 func TestOpsDeployWarnsWhenPrimaryAndEmergencyReportsAreUnavailable(t *testing.T) {
@@ -373,11 +438,14 @@ func TestOpsDeployWarnsWhenPrimaryAndEmergencyReportsAreUnavailable(t *testing.T
 	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
 		t.Fatalf("preview code=%d err=%q", code, previewErr.String())
 	}
-	for _, path := range []string{p.OpsReportRoot, filepath.Join(filepath.Dir(p.OpsReportRoot), "emergency-reports")} {
-		if err := os.WriteFile(path, []byte("blocked"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(p.OpsReportRoot, []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
 	}
+	parent := filepath.Dir(p.OpsReportRoot)
+	if err := os.Chmod(parent, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
 	confirmedExecutor := successfulCLICloudflareExecutor()
 	confirmedExecutor.results = append(confirmedExecutor.results,
 		opsexec.Result{ExitCode: 0, Stdout: `[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]`},

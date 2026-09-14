@@ -13,16 +13,25 @@ func writeCloudflareReport(reportRoot string, report opsreport.Report) (string, 
 	if primaryErr == nil {
 		return path, nil
 	}
-	fallbackRoot := filepath.Join(filepath.Dir(reportRoot), "emergency-reports")
-	if err := os.MkdirAll(fallbackRoot, 0o700); err != nil {
+	parent := filepath.Dir(reportRoot)
+	parentInfo, err := os.Lstat(parent)
+	if err != nil || !parentInfo.IsDir() || parentInfo.Mode()&os.ModeSymlink != 0 {
 		return "", errors.New("primary and emergency operation reports could not be persisted")
 	}
-	if err := os.Chmod(fallbackRoot, 0o700); err != nil {
+	fallbackRoot, err := os.MkdirTemp(parent, "emergency-reports-")
+	if err != nil {
 		return "", errors.New("primary and emergency operation reports could not be persisted")
 	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.RemoveAll(fallbackRoot)
+		}
+	}()
 	path, fallbackErr := opsreport.Write(fallbackRoot, report, nil)
 	if fallbackErr != nil {
 		return "", errors.New("primary and emergency operation reports could not be persisted")
 	}
+	cleanup = false
 	return path, nil
 }

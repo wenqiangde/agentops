@@ -293,10 +293,14 @@ private controlled snapshot, including ignored build output and project-local
 dependencies. Dry-run, deploy or rollback, and post-operation identity reads
 all use that same snapshot. The confirmed command also repeats Git, Wrangler,
 account, and config checks and runs `wrangler deploy --config <file>` only when
-the snapshot digest and recomputed plan match the supplied digest. The resolved
+the snapshot digest and recomputed plan match the supplied digest. After the
+dry-run, AgentOps recomputes the snapshot digest and removes write permission
+before any production command. The resolved
 `source.path` and nested config must remain inside their resolved roots. Internal
 npm links such as `node_modules/.bin/wrangler` are rewritten into the snapshot;
-links resolving outside the source are rejected. Success additionally requires one new
+links resolving outside the source are rejected. Wrangler `main`, assets/site
+directories, and build working directories must be clean relative paths inside
+the snapshot. Success additionally requires one new
 machine-readable deployment UUID, valid version UUID evidence, configured HTTP
 health, and a mode-`0600` report. Raw Wrangler output is not report content.
 AgentOps compares machine-readable output from
@@ -356,7 +360,8 @@ Repository cleanliness and frozen deployment input are separate concepts:
   identity verification fails, AgentOps writes a terminal mode-`0600` failure
   report and requires manual Cloudflare state inspection before any retry. If
   the primary report root is unavailable, it writes to a private sibling
-  `emergency-reports` directory and prints that path.
+  `emergency-reports-<random>` directory created atomically and prints that
+  path. A predictable pre-existing link is never followed.
 
 AgentOps does not install dependencies, run Wrangler login, stage/commit/push
 Git changes, create secrets, apply D1 migrations, or infer a rollback target.

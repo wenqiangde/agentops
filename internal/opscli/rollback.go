@@ -190,6 +190,10 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest is stale")
 		return 1
 	}
+	if err := opscloudflare.SealSourceSnapshot(snapshot.Path, snapshot.SHA256); err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest is stale")
+		return 1
+	}
 	started := time.Now().UTC()
 	result, err := opscloudflare.ApplyRollback(ctx, opsCloudflareExecutor(), confirmed)
 	if err != nil || !result.Success {

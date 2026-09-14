@@ -233,6 +233,36 @@ func TestOpsRollbackWritesFailureReportWhenActiveIdentityLookupFails(t *testing.
 	}
 }
 
+func TestOpsRollbackRejectsSnapshotDriftBeforeProductionCommand(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+	target := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	args := []string{"ops", "rollback", "example-relay", "--environment", "production", "--version", target}
+	previewExecutor := successfulCLICloudflareRollbackExecutor(target)
+	stubCLICloudflareExecutor(t, previewExecutor)
+	var preview, previewErr bytes.Buffer
+	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
+		t.Fatalf("preview code=%d err=%q", code, previewErr.String())
+	}
+	confirmedExecutor := successfulCLICloudflareRollbackExecutor(target)
+	confirmedExecutor.afterRun = func(request opsexec.Request) {
+		if len(request.Args) > 1 && request.Args[0] == "deployments" && request.Args[1] == "status" {
+			writeCLIFile(t, filepath.Join(request.Directory, "src", "index.ts"), "snapshot changed\n", 0o644)
+			confirmedExecutor.afterRun = nil
+		}
+	}
+	stubCLICloudflareExecutor(t, confirmedExecutor)
+	var stdout, stderr bytes.Buffer
+	confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
+	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "stale") {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
+	}
+	if hasCloudflareRollback(confirmedExecutor.requests) {
+		t.Fatalf("changed snapshot executed rollback: %+v", confirmedExecutor.requests)
+	}
+}
+
 func TestOpsRollbackUsesEmergencyReportWhenPrimaryReportRootIsUnavailable(t *testing.T) {
 	p := opsTestPaths(t, "valid")
 	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
@@ -256,7 +286,7 @@ func TestOpsRollbackUsesEmergencyReportWhenPrimaryReportRootIsUnavailable(t *tes
 	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "emergency-reports") {
 		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
 	}
-	fallback := filepath.Join(filepath.Dir(p.OpsReportRoot), "emergency-reports")
+	fallback := emergencyReportRoot(t, filepath.Dir(p.OpsReportRoot))
 	_ = readOnlyCloudflareReport(t, fallback)
 }
 

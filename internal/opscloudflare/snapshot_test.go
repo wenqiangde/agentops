@@ -69,3 +69,25 @@ func TestSourceSnapshotDigestIncludesIgnoredBytes(t *testing.T) {
 		t.Fatal("ignored byte change did not change snapshot digest")
 	}
 }
+
+func TestSealSourceSnapshotMakesFilesReadOnlyAndRejectsDigestDrift(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "src", "index.ts"), "first\n", 0o644)
+	snapshot, err := opscloudflare.CreateSourceSnapshot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(snapshot.Cleanup)
+	writeFile(t, filepath.Join(snapshot.Path, "src", "index.ts"), "changed\n", 0o644)
+	if err := opscloudflare.SealSourceSnapshot(snapshot.Path, snapshot.SHA256); err == nil {
+		t.Fatal("changed snapshot was sealed")
+	}
+	writeFile(t, filepath.Join(snapshot.Path, "src", "index.ts"), "first\n", 0o644)
+	if err := opscloudflare.SealSourceSnapshot(snapshot.Path, snapshot.SHA256); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(snapshot.Path, "src", "index.ts"))
+	if err != nil || info.Mode().Perm()&0o222 != 0 {
+		t.Fatalf("mode=%v err=%v", info.Mode(), err)
+	}
+}

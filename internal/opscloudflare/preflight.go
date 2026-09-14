@@ -127,11 +127,35 @@ func validateProjectFiles(request Request) error {
 	if err != nil {
 		return err
 	}
+	if err := validateWranglerInputPaths(request.SourcePath, config); err != nil {
+		return err
+	}
 	if config.Name != request.Worker {
 		return errors.New("Cloudflare Worker name does not match Wrangler config")
 	}
 	if config.AccountID != request.AccountID {
 		return errors.New("Cloudflare account ID does not match Wrangler config")
+	}
+	return nil
+}
+
+func validateWranglerInputPaths(source string, config wranglerConfig) error {
+	for _, value := range []string{config.Main, config.Assets.Directory, config.Site.Bucket, config.Build.CWD} {
+		if value == "" {
+			continue
+		}
+		clean := filepath.Clean(value)
+		if !utf8.ValidString(value) || filepath.IsAbs(value) || clean != value || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return errors.New("Wrangler input paths must remain inside source path")
+		}
+		candidate := filepath.Join(source, clean)
+		if _, err := os.Lstat(candidate); err == nil {
+			resolvedSource, sourceErr := filepath.EvalSymlinks(source)
+			resolvedCandidate, candidateErr := filepath.EvalSymlinks(candidate)
+			if sourceErr != nil || candidateErr != nil || !pathWithin(resolvedSource, resolvedCandidate) {
+				return errors.New("Wrangler input paths must remain inside source path")
+			}
+		}
 	}
 	return nil
 }
@@ -189,6 +213,16 @@ func readRegularFile(path, label string) ([]byte, error) {
 type wranglerConfig struct {
 	Name      string `json:"name"`
 	AccountID string `json:"account_id"`
+	Main      string `json:"main"`
+	Assets    struct {
+		Directory string `json:"directory"`
+	} `json:"assets"`
+	Site struct {
+		Bucket string `json:"bucket"`
+	} `json:"site"`
+	Build struct {
+		CWD string `json:"cwd"`
+	} `json:"build"`
 }
 
 func parseWranglerConfig(content []byte) (wranglerConfig, error) {
