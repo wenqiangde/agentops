@@ -3,6 +3,7 @@ package opscli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,8 +11,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/wenqiangde/agentops/internal/opsconfig"
 	"github.com/wenqiangde/agentops/internal/opsexec"
+	"github.com/wenqiangde/agentops/internal/opshealth"
+	"github.com/wenqiangde/agentops/internal/opsreport"
 )
 
 func TestOpsDeployRoutesCloudflareWorkerToReadOnlyPreview(t *testing.T) {
@@ -52,6 +57,258 @@ func TestOpsDeployRoutesCloudflareWorkerToReadOnlyPreview(t *testing.T) {
 	}
 }
 
+func TestOpsDeployRequiresConfirmAndExactDigestBeforeCloudflareProductionCommand(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+
+	previewExecutor := successfulCLICloudflareExecutor()
+	stubCLICloudflareExecutor(t, previewExecutor)
+	var preview, previewErr bytes.Buffer
+	args := []string{"ops", "deploy", "preveal-relay", "--environment", "production", "--version", "2026.09.14-1"}
+	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
+		t.Fatalf("preview code=%d out=%q err=%q", code, preview.String(), previewErr.String())
+	}
+	digest := previewDigest(t, preview.String())
+	if hasCloudflareProductionDeploy(previewExecutor.requests) {
+		t.Fatalf("preview executed production deploy: %+v", previewExecutor.requests)
+	}
+
+	staleExecutor := successfulCLICloudflareExecutor()
+	stubCLICloudflareExecutor(t, staleExecutor)
+	var staleOut, staleErr bytes.Buffer
+	staleArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", strings.Repeat("0", 64))
+	if code, _ := executeRootCommand(p, staleArgs, &staleOut, &staleErr); code != 1 || !strings.Contains(staleErr.String(), "stale") {
+		t.Fatalf("stale code=%d out=%q err=%q", code, staleOut.String(), staleErr.String())
+	}
+	if hasCloudflareProductionDeploy(staleExecutor.requests) {
+		t.Fatalf("stale confirmation executed production deploy: %+v", staleExecutor.requests)
+	}
+
+	confirmedExecutor := successfulCLICloudflareExecutor()
+	confirmedExecutor.results = append(confirmedExecutor.results,
+		opsexec.Result{ExitCode: 0, Stdout: `[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}]}]`},
+		opsexec.Result{ExitCode: 0, Stdout: "private deploy output"},
+		opsexec.Result{ExitCode: 0, Stdout: `[{"id":"22222222-2222-4222-8222-222222222222","versions":[{"version_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}]},{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}]}]`},
+	)
+	stubCLICloudflareExecutor(t, confirmedExecutor)
+	stubCLICloudflareHealth(t, opshealth.Result{Healthy: true, Type: "http", StatusCode: 204, Detail: "status=204"})
+	var confirmedOut, confirmedErr bytes.Buffer
+	confirmedArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", digest)
+	if code, _ := executeRootCommand(p, confirmedArgs, &confirmedOut, &confirmedErr); code != 0 {
+		t.Fatalf("confirmed code=%d out=%q err=%q", code, confirmedOut.String(), confirmedErr.String())
+	}
+	if !hasCloudflareProductionDeploy(confirmedExecutor.requests) {
+		t.Fatalf("exact confirmation did not execute production deploy: %+v", confirmedExecutor.requests)
+	}
+	for _, wanted := range []string{
+		"deployment: succeeded",
+		"deployment-id: 22222222-2222-4222-8222-222222222222",
+		"version-id: bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		"report-id: cloudflare-deploy-",
+	} {
+		if !strings.Contains(confirmedOut.String(), wanted) {
+			t.Fatalf("confirmed output missing %q: %s", wanted, confirmedOut.String())
+		}
+	}
+	report := readOnlyCloudflareReport(t, p.OpsReportRoot)
+	if report.Health.Type != "http" || !report.Health.Healthy || report.Health.StatusCode != 204 || report.ArtifactDigest == "" {
+		t.Fatalf("report health=%+v artifact=%q", report.Health, report.ArtifactDigest)
+	}
+	if strings.Contains(confirmedOut.String(), "private deploy output") {
+		t.Fatalf("confirmed output exposed Wrangler output: %s", confirmedOut.String())
+	}
+}
+
+func TestOpsDeployWritesBoundedFailureReportWhenCloudflareHTTPHealthFails(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+	args := []string{"ops", "deploy", "preveal-relay", "--environment", "production", "--version", "2026.09.14-1"}
+	previewExecutor := successfulCLICloudflareExecutor()
+	stubCLICloudflareExecutor(t, previewExecutor)
+	var preview, previewErr bytes.Buffer
+	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
+		t.Fatalf("preview code=%d out=%q err=%q", code, preview.String(), previewErr.String())
+	}
+
+	confirmedExecutor := successfulCLICloudflareExecutor()
+	confirmedExecutor.results = append(confirmedExecutor.results,
+		opsexec.Result{ExitCode: 0, Stdout: `[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}]}]`},
+		opsexec.Result{ExitCode: 0, Stdout: "token=wrangler-secret"},
+		opsexec.Result{ExitCode: 0, Stdout: `[{"id":"22222222-2222-4222-8222-222222222222","versions":[{"version_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}]}]`},
+	)
+	stubCLICloudflareExecutor(t, confirmedExecutor)
+	stubCLICloudflareHealth(t, opshealth.Result{Healthy: false, Type: "http", StatusCode: 503, Detail: "status=503"})
+	var stdout, stderr bytes.Buffer
+	confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
+	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "health check failed") {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
+	}
+	report := readOnlyCloudflareReport(t, p.OpsReportRoot)
+	if report.Health.Healthy || report.Health.StatusCode != 503 || report.Error != "HTTP health check failed" || !report.Terminal {
+		t.Fatalf("report=%+v", report)
+	}
+	data, err := os.ReadFile(filepath.Join(p.OpsReportRoot, report.OperationID+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, output := range []string{stdout.String(), stderr.String(), string(data)} {
+		if strings.Contains(output, "wrangler-secret") || strings.Contains(output, "token=") {
+			t.Fatalf("private Wrangler output leaked: %s", output)
+		}
+	}
+}
+
+func TestOpsDeployRejectsCloudflareInputDriftBeforeProductionCommand(t *testing.T) {
+	tests := []struct {
+		name          string
+		mutate        func(*testing.T, string)
+		applyExecutor func() *cliCloudflareExecutor
+		wantError     string
+	}{
+		{
+			name: "scoped bytes",
+			mutate: func(t *testing.T, root string) {
+				writeCLIFile(t, filepath.Join(root, "relay", "src", "index.ts"), "changed\n", 0o644)
+			},
+			applyExecutor: successfulCLICloudflareExecutor,
+			wantError:     "stale",
+		},
+		{
+			name: "untracked scoped file",
+			mutate: func(t *testing.T, root string) {
+				writeCLIFile(t, filepath.Join(root, "relay", "src", "untracked.ts"), "new\n", 0o644)
+			},
+			applyExecutor: successfulCLICloudflareExecutor,
+			wantError:     "stale",
+		},
+		{
+			name: "Wrangler config",
+			mutate: func(t *testing.T, root string) {
+				writeCLIFile(t, filepath.Join(root, "relay", "wrangler.jsonc"), `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","compatibility_date":"2026-09-14"}`, 0o644)
+			},
+			applyExecutor: successfulCLICloudflareExecutor,
+			wantError:     "stale",
+		},
+		{
+			name:   "account membership",
+			mutate: func(*testing.T, string) {},
+			applyExecutor: func() *cliCloudflareExecutor {
+				return &cliCloudflareExecutor{results: []opsexec.Result{
+					{ExitCode: 0, Stdout: "4.35.0\n"},
+					{ExitCode: 0, Stdout: `{"accounts":[{"id":"ffffffffffffffffffffffffffffffff"}]}`},
+				}}
+			},
+			wantError: "preview failed",
+		},
+		{
+			name:   "Wrangler version",
+			mutate: func(*testing.T, string) {},
+			applyExecutor: func() *cliCloudflareExecutor {
+				executor := successfulCLICloudflareExecutor()
+				executor.results[0].Stdout = "4.36.0\n"
+				return executor
+			},
+			wantError: "stale",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := opsTestPaths(t, "valid")
+			repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+			writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+			previewExecutor := successfulCLICloudflareExecutor()
+			original := opsCloudflareExecutor
+			opsCloudflareExecutor = func() opsexec.Executor { return previewExecutor }
+			t.Cleanup(func() { opsCloudflareExecutor = original })
+
+			args := []string{"ops", "deploy", "preveal-relay", "--environment", "production", "--version", "2026.09.14-1"}
+			var preview, previewErr bytes.Buffer
+			if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
+				t.Fatalf("preview code=%d out=%q err=%q", code, preview.String(), previewErr.String())
+			}
+			digest := previewDigest(t, preview.String())
+			tt.mutate(t, repositoryRoot)
+
+			applyExecutor := tt.applyExecutor()
+			opsCloudflareExecutor = func() opsexec.Executor { return applyExecutor }
+			var stdout, stderr bytes.Buffer
+			confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", digest)
+			if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), tt.wantError) {
+				t.Fatalf("code=%d out=%q err=%q want=%q", code, stdout.String(), stderr.String(), tt.wantError)
+			}
+			if hasCloudflareProductionDeploy(applyExecutor.requests) {
+				t.Fatalf("drift executed production deploy: %+v", applyExecutor.requests)
+			}
+		})
+	}
+}
+
+func successfulCLICloudflareExecutor() *cliCloudflareExecutor {
+	return &cliCloudflareExecutor{results: []opsexec.Result{
+		{ExitCode: 0, Stdout: "4.35.0\n"},
+		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`},
+		{ExitCode: 0, Stdout: "dry-run"},
+	}}
+}
+
+func stubCLICloudflareExecutor(t *testing.T, executor opsexec.Executor) {
+	t.Helper()
+	previous := opsCloudflareExecutor
+	opsCloudflareExecutor = func() opsexec.Executor { return executor }
+	t.Cleanup(func() { opsCloudflareExecutor = previous })
+}
+
+func stubCLICloudflareHealth(t *testing.T, result opshealth.Result) {
+	t.Helper()
+	previous := opsHealthProbe
+	opsHealthProbe = func(context.Context, opsexec.Executor, opsconfig.Environment, opsconfig.Health, time.Duration) opshealth.Result {
+		return result
+	}
+	t.Cleanup(func() { opsHealthProbe = previous })
+}
+
+func readOnlyCloudflareReport(t *testing.T, root string) opsreport.Report {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("reports=%v err=%v", entries, err)
+	}
+	path := filepath.Join(root, entries[0].Name())
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("report info=%v err=%v", info, err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report opsreport.Report
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	return report
+}
+
+func hasCloudflareProductionDeploy(requests []opsexec.Request) bool {
+	for _, request := range requests {
+		if len(request.Args) > 0 && request.Args[0] == "deploy" && !containsCLIArgument(request.Args, "--dry-run") {
+			return true
+		}
+	}
+	return false
+}
+
+func containsCLIArgument(arguments []string, wanted string) bool {
+	for _, argument := range arguments {
+		if argument == wanted {
+			return true
+		}
+	}
+	return false
+}
+
 type cliCloudflareExecutor struct {
 	requests []opsexec.Request
 	results  []opsexec.Result
@@ -79,6 +336,7 @@ func newCLICloudflareRepository(t *testing.T) (string, string) {
 	writeCLIFile(t, filepath.Join(source, "package-lock.json"), `{}`, 0o644)
 	writeCLIFile(t, filepath.Join(source, "node_modules", ".bin", "wrangler"), "#!/usr/bin/env node\n", 0o755)
 	writeCLIFile(t, filepath.Join(source, "wrangler.jsonc"), `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef"}`, 0o644)
+	writeCLIFile(t, filepath.Join(source, "src", "index.ts"), "baseline\n", 0o644)
 	writeCLIFile(t, filepath.Join(root, "admin", "index.html"), "admin", 0o644)
 	runCLIGit(t, root, "init", "--quiet")
 	runCLIGit(t, root, "config", "user.name", "AgentOps Test")
@@ -110,6 +368,10 @@ environments:
     worker: example-worker
     accountId: 0123456789abcdef0123456789abcdef
     wranglerConfig: wrangler.jsonc
+    health:
+      type: http
+      url: https://example.test/health
+      successStatuses: [200, 204]
 `, sourcePath, repositoryRoot)
 	writeCLIFile(t, filepath.Join(operationsRoot, "services", "preveal-relay.yaml"), content, 0o644)
 }

@@ -97,7 +97,7 @@ func opsDeploy(p paths.Paths, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "agentops: invalid default operation timeout")
 			return 1
 		}
-		return opsCloudflareDeploy(service, cloudflareProduction, requestedVersion, confirm, timeout, stdout, stderr)
+		return opsCloudflareDeploy(p.OpsReportRoot, service, cloudflareProduction, requestedVersion, confirm, previewDigest, timeout, stdout, stderr)
 	}
 	if !service.BuildConfigured() {
 		fmt.Fprintln(stderr, "agentops: service has no managed build/deploy configuration")
