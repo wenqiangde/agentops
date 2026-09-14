@@ -116,10 +116,10 @@ func validateProjectFiles(request Request) error {
 		return errors.New("package.json must declare Wrangler")
 	}
 	wranglerPath := filepath.Join(request.SourcePath, "node_modules", ".bin", "wrangler")
-	if err := requireExecutable(wranglerPath); err != nil {
+	if err := requireProjectExecutable(request.SourcePath, wranglerPath); err != nil {
 		return err
 	}
-	configContent, err := readRegularFile(filepath.Join(request.SourcePath, request.WranglerConfig), "Wrangler config")
+	configContent, err := readContainedRegularFile(request.SourcePath, filepath.Join(request.SourcePath, request.WranglerConfig), "Wrangler config")
 	if err != nil {
 		return err
 	}
@@ -154,12 +154,24 @@ func hasLockfile(root string) bool {
 	return false
 }
 
-func requireExecutable(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
+func requireProjectExecutable(source, path string) error {
+	resolvedSource, sourceErr := filepath.EvalSymlinks(source)
+	resolvedPath, pathErr := filepath.EvalSymlinks(path)
+	info, statErr := os.Stat(resolvedPath)
+	nodeModules := filepath.Join(resolvedSource, "node_modules")
+	if sourceErr != nil || pathErr != nil || statErr != nil || !pathWithin(nodeModules, resolvedPath) || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
 		return errors.New("project-local Wrangler executable is unavailable; run npm ci")
 	}
 	return nil
+}
+
+func readContainedRegularFile(root, path, label string) ([]byte, error) {
+	resolvedRoot, rootErr := filepath.EvalSymlinks(root)
+	resolvedPath, pathErr := filepath.EvalSymlinks(path)
+	if rootErr != nil || pathErr != nil || !pathWithin(resolvedRoot, resolvedPath) {
+		return nil, fmt.Errorf("%s is unavailable", label)
+	}
+	return readRegularFile(resolvedPath, label)
 }
 
 func readRegularFile(path, label string) ([]byte, error) {

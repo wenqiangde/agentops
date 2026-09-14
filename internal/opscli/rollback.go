@@ -141,19 +141,28 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback Git scope inspection failed")
 		return 1
 	}
+	snapshot, err := opscloudflare.CreateSourceSnapshot(service.Source.Path)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare source snapshot failed")
+		return 1
+	}
+	defer snapshot.Cleanup()
 	plan, err := opscloudflare.CreateRollbackPlan(ctx, opsCloudflareExecutor(), opscloudflare.RollbackPlanRequest{
 		Service: service.ID, TargetID: targetID, Git: gitEvidence,
 		Preflight: opscloudflare.Request{
-			SourcePath: service.Source.Path, Worker: production.Worker, AccountID: production.AccountID,
+			SourcePath: snapshot.Path, Worker: production.Worker, AccountID: production.AccountID,
 			WranglerConfig: production.WranglerConfig, Timeout: timeout,
 		},
+		RepositorySourcePath: service.Source.Path, DeploymentInputSHA256: snapshot.SHA256,
 		RequireCommittedScope: service.Deployment.RequireCommittedScope,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview failed")
 		return 1
 	}
-	encoded, err := json.MarshalIndent(plan, "", "  ")
+	displayPlan := plan
+	displayPlan.AccountID = maskedCloudflareAccountID(plan.AccountID)
+	encoded, err := json.MarshalIndent(displayPlan, "", "  ")
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview encoding failed")
 		return 1
@@ -185,7 +194,9 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 	result, err := opscloudflare.ApplyRollback(ctx, opsCloudflareExecutor(), confirmed)
 	if err != nil || !result.Success {
 		if result.ProductionWriteSucceeded {
-			writeCloudflareRollbackFailureReport(reportRoot, digest, plan, started, time.Now().UTC(), stdout)
+			if reportErr := writeCloudflareRollbackFailureReport(reportRoot, digest, plan, started, time.Now().UTC(), stdout); reportErr != nil {
+				fmt.Fprintln(stderr, "agentops: production state unknown; audit persistence failed")
+			}
 		}
 		fmt.Fprintln(stdout, "rollback: failed")
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback apply failed")
@@ -198,9 +209,9 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback report identity failed")
 		return 1
 	}
-	reportPath, err := opsreport.Write(reportRoot, cloudflareRollbackOperationReport(operationID, digest, plan, health, started, finished), nil)
+	reportPath, err := writeCloudflareReport(reportRoot, cloudflareRollbackOperationReport(operationID, digest, plan, health, started, finished))
 	if err != nil {
-		fmt.Fprintln(stderr, "agentops: Cloudflare rollback report failed")
+		fmt.Fprintln(stderr, "agentops: production state unknown; audit persistence failed")
 		return 1
 	}
 	fmt.Fprintf(stdout, "deployment-id: %s\nversion-id: %s\n", result.DeploymentID, result.VersionID)
@@ -214,10 +225,10 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 	return 0
 }
 
-func writeCloudflareRollbackFailureReport(reportRoot, digest string, plan opscloudflare.CloudflareRollbackPlan, started, finished time.Time, stdout io.Writer) {
+func writeCloudflareRollbackFailureReport(reportRoot, digest string, plan opscloudflare.CloudflareRollbackPlan, started, finished time.Time, stdout io.Writer) error {
 	operationID, err := newOpsOperationID("cloudflare-rollback")
 	if err != nil {
-		return
+		return err
 	}
 	previous := "multiple"
 	if len(plan.CurrentVersionIDs) == 1 {
@@ -231,10 +242,12 @@ func writeCloudflareRollbackFailureReport(reportRoot, digest string, plan opsclo
 		Recovery: "manual-review-required", Terminal: true, StartedAt: started, FinishedAt: finished,
 		Error: "active deployment verification failed", ManualWork: "inspect Cloudflare deployment state before retrying",
 	}
-	reportPath, err := opsreport.Write(reportRoot, report, nil)
-	if err == nil {
-		fmt.Fprintf(stdout, "report-id: %s\nreport: %s\n", operationID, reportPath)
+	reportPath, err := writeCloudflareReport(reportRoot, report)
+	if err != nil {
+		return err
 	}
+	fmt.Fprintf(stdout, "report-id: %s\nreport: %s\n", operationID, reportPath)
+	return nil
 }
 
 func cloudflareRollbackOperationReport(operationID, digest string, plan opscloudflare.CloudflareRollbackPlan, health opshealth.Result, started, finished time.Time) opsreport.Report {

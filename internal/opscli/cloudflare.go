@@ -29,21 +29,30 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 		fmt.Fprintln(stderr, "agentops: Cloudflare Git scope inspection failed")
 		return 1
 	}
+	snapshot, err := opscloudflare.CreateSourceSnapshot(service.Source.Path)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare source snapshot failed")
+		return 1
+	}
+	defer snapshot.Cleanup()
 	plan, err := opscloudflare.CreatePlan(ctx, opsCloudflareExecutor(), opscloudflare.PlanRequest{
 		Service: service.ID, RequestedVersion: requestedVersion,
 		Git: gitEvidence,
 		Preflight: opscloudflare.Request{
-			SourcePath: service.Source.Path, Worker: production.Worker,
+			SourcePath: snapshot.Path, Worker: production.Worker,
 			AccountID: production.AccountID, WranglerConfig: production.WranglerConfig,
 			Timeout: timeout,
 		},
+		RepositorySourcePath: service.Source.Path, DeploymentInputSHA256: snapshot.SHA256,
 		RequireCommittedScope: service.Deployment.RequireCommittedScope,
 	})
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare deployment preview failed")
 		return 1
 	}
-	encoded, err := json.MarshalIndent(plan, "", "  ")
+	displayPlan := plan
+	displayPlan.AccountID = maskedCloudflareAccountID(plan.AccountID)
+	encoded, err := json.MarshalIndent(displayPlan, "", "  ")
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare deployment preview encoding failed")
 		return 1
@@ -73,7 +82,9 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 		result, err := opscloudflare.Apply(ctx, opsCloudflareExecutor(), confirmed)
 		if err != nil || !result.Success {
 			if result.ProductionWriteSucceeded {
-				writeCloudflareApplyFailureReport(reportRoot, "cloudflare-deploy", digest, plan, started, time.Now().UTC(), stdout)
+				if reportErr := writeCloudflareApplyFailureReport(reportRoot, "cloudflare-deploy", digest, plan, started, time.Now().UTC(), stdout); reportErr != nil {
+					fmt.Fprintln(stderr, "agentops: production state unknown; audit persistence failed")
+				}
 			}
 			fmt.Fprintln(stdout, "deployment: failed")
 			fmt.Fprintln(stderr, "agentops: Cloudflare deployment apply failed")
@@ -87,9 +98,9 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 			return 1
 		}
 		report := cloudflareOperationReport(operationID, digest, plan, health, started, finished)
-		reportPath, err := opsreport.Write(reportRoot, report, nil)
+		reportPath, err := writeCloudflareReport(reportRoot, report)
 		if err != nil {
-			fmt.Fprintln(stderr, "agentops: Cloudflare deployment report failed")
+			fmt.Fprintln(stderr, "agentops: production state unknown; audit persistence failed")
 			return 1
 		}
 		fmt.Fprintf(stdout, "deployment-id: %s\n", result.DeploymentID)
@@ -107,6 +118,13 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 	return 0
 }
 
+func maskedCloudflareAccountID(accountID string) string {
+	if len(accountID) < 10 {
+		return "[redacted]"
+	}
+	return accountID[:6] + "..." + accountID[len(accountID)-4:]
+}
+
 func revalidateCloudflareGitEvidence(ctx context.Context, service opsconfig.Service, expected opsgit.Evidence) error {
 	actual, err := opsgit.Inspect(ctx, opsgit.Request{RepositoryRoot: service.Source.RepositoryRoot, Scopes: service.Source.DeploymentScope})
 	if err != nil || !reflect.DeepEqual(actual, expected) {
@@ -115,10 +133,10 @@ func revalidateCloudflareGitEvidence(ctx context.Context, service opsconfig.Serv
 	return nil
 }
 
-func writeCloudflareApplyFailureReport(reportRoot, operationKind, digest string, plan opscloudflare.CloudflareDeployPlan, started, finished time.Time, stdout io.Writer) {
+func writeCloudflareApplyFailureReport(reportRoot, operationKind, digest string, plan opscloudflare.CloudflareDeployPlan, started, finished time.Time, stdout io.Writer) error {
 	operationID, err := newOpsOperationID(operationKind)
 	if err != nil {
-		return
+		return err
 	}
 	report := opsreport.Report{
 		OperationID: operationID, Actor: plan.AccountID, Service: plan.Service, Environment: plan.Environment, Host: plan.Worker,
@@ -128,10 +146,12 @@ func writeCloudflareApplyFailureReport(reportRoot, operationKind, digest string,
 		Recovery: "manual-review-required", Terminal: true, StartedAt: started, FinishedAt: finished,
 		Error: "post-deploy identity verification failed", ManualWork: "inspect Cloudflare deployment state before retrying",
 	}
-	reportPath, err := opsreport.Write(reportRoot, report, nil)
-	if err == nil {
-		fmt.Fprintf(stdout, "report-id: %s\nreport: %s\n", operationID, reportPath)
+	reportPath, err := writeCloudflareReport(reportRoot, report)
+	if err != nil {
+		return err
 	}
+	fmt.Fprintf(stdout, "report-id: %s\nreport: %s\n", operationID, reportPath)
+	return nil
 }
 
 func cloudflareOperationReport(operationID, digest string, plan opscloudflare.CloudflareDeployPlan, health opshealth.Result, started, finished time.Time) opsreport.Report {

@@ -53,6 +53,29 @@ func TestInspectUsesProjectLocalWranglerFromSourcePath(t *testing.T) {
 	}
 }
 
+func TestInspectAcceptsInternalWranglerSymlink(t *testing.T) {
+	root := newCloudflareProject(t)
+	wrangler := filepath.Join(root, "node_modules", ".bin", "wrangler")
+	if err := os.Remove(wrangler); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "node_modules", "wrangler", "bin", "wrangler.js"), "#!/usr/bin/env node\n", 0o755)
+	if err := os.Symlink(filepath.Join("..", "wrangler", "bin", "wrangler.js"), wrangler); err != nil {
+		t.Fatal(err)
+	}
+	executor := &recordingExecutor{results: []opsexec.Result{
+		{ExitCode: 0, Stdout: "4.35.0\n"},
+		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`},
+	}}
+	_, err := opscloudflare.Inspect(context.Background(), executor, opscloudflare.Request{
+		SourcePath: root, Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
+		WranglerConfig: "wrangler.jsonc", Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInspectRejectsWrongAccountAndConfigIdentity(t *testing.T) {
 	tests := []struct {
 		name      string

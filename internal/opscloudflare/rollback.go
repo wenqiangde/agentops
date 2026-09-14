@@ -34,6 +34,8 @@ type RollbackPlanRequest struct {
 	TargetID              string
 	Git                   opsgit.Evidence
 	Preflight             Request
+	RepositorySourcePath  string
+	DeploymentInputSHA256 string
 	RequireCommittedScope bool
 }
 
@@ -48,6 +50,7 @@ type CloudflareRollbackPlan struct {
 	BaseCommit            string         `json:"base_commit"`
 	ScopeState            string         `json:"scope_state"`
 	ScopeContentSHA256    string         `json:"scope_content_sha256"`
+	DeploymentInputSHA256 string         `json:"deployment_input_sha256"`
 	ScopeEntries          []opsgit.Entry `json:"scope_entries,omitempty"`
 	RequireCommittedScope bool           `json:"require_committed_scope"`
 	RequestedTargetID     string         `json:"requested_target_id"`
@@ -116,7 +119,7 @@ func CreateRollbackPlan(ctx context.Context, executor opsexec.Executor, request 
 	if ctx == nil || executor == nil {
 		return CloudflareRollbackPlan{}, errors.New("Cloudflare rollback planning inputs are incomplete")
 	}
-	if err := validatePlanRequest(PlanRequest{Service: request.Service, RequestedVersion: "rollback", Git: request.Git, Preflight: request.Preflight}); err != nil {
+	if err := validatePlanRequest(PlanRequest{Service: request.Service, RequestedVersion: "rollback", Git: request.Git, Preflight: request.Preflight, RepositorySourcePath: request.RepositorySourcePath, DeploymentInputSHA256: request.DeploymentInputSHA256}); err != nil {
 		return CloudflareRollbackPlan{}, err
 	}
 	preflight, err := Inspect(ctx, executor, request.Preflight)
@@ -153,7 +156,8 @@ func CreateRollbackPlan(ctx context.Context, executor opsexec.Executor, request 
 		Worker: preflight.Worker, AccountID: preflight.AccountID,
 		WranglerConfig: preflight.WranglerConfig, WranglerConfigSHA256: hex.EncodeToString(configDigest[:]), WranglerVersion: preflight.WranglerVersion,
 		BaseCommit: request.Git.BaseCommit, ScopeState: request.Git.State, ScopeContentSHA256: request.Git.ContentSHA256,
-		ScopeEntries: append([]opsgit.Entry(nil), request.Git.Entries...), RequireCommittedScope: request.RequireCommittedScope,
+		DeploymentInputSHA256: request.DeploymentInputSHA256,
+		ScopeEntries:          append([]opsgit.Entry(nil), request.Git.Entries...), RequireCommittedScope: request.RequireCommittedScope,
 		RequestedTargetID: request.TargetID, TargetVersionID: target.VersionID, TargetDeploymentID: target.DeploymentID,
 		CurrentDeploymentID: current.ID, CurrentVersionIDs: currentVersions, TargetVerified: true,
 		Blocked: blocked, BlockReason: blockReason, SourcePath: request.Preflight.SourcePath, Timeout: request.Preflight.Timeout,

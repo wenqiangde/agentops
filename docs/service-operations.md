@@ -288,12 +288,15 @@ agentops deploy example-relay --environment production --version 2026.09.14-1 \
   --confirm --preview-digest <64-lowercase-hex>
 ```
 
-The confirmed command repeats Git, Wrangler, account, config, and dry-run
-checks, then takes a second scoped Git snapshot immediately before the
-production command. It runs `wrangler deploy --config <file>` only when both
-snapshots match and the recomputed plan matches the supplied digest. The
-resolved `source.path` must also remain inside the resolved repository root;
-a symlink cannot redirect Wrangler outside that boundary. Success additionally requires one new
+The preview and confirmed command each copy the complete Worker source into a
+private controlled snapshot, including ignored build output and project-local
+dependencies. Dry-run, deploy or rollback, and post-operation identity reads
+all use that same snapshot. The confirmed command also repeats Git, Wrangler,
+account, and config checks and runs `wrangler deploy --config <file>` only when
+the snapshot digest and recomputed plan match the supplied digest. The resolved
+`source.path` and nested config must remain inside their resolved roots. Internal
+npm links such as `node_modules/.bin/wrangler` are rewritten into the snapshot;
+links resolving outside the source are rejected. Success additionally requires one new
 machine-readable deployment UUID, valid version UUID evidence, configured HTTP
 health, and a mode-`0600` report. Raw Wrangler output is not report content.
 AgentOps compares machine-readable output from
@@ -333,6 +336,8 @@ Repository cleanliness and frozen deployment input are separate concepts:
 - Any scoped bytes, Wrangler config, account membership, Worker identity,
   Wrangler version, base commit, or requested version change requires a new
   preview and digest.
+- Ignored files are absent from Git cleanliness evidence but remain part of the
+  complete source snapshot digest when they can be read from `source.path`.
 
 ### Remediation And Stop Conditions
 
@@ -349,12 +354,16 @@ Repository cleanliness and frozen deployment input are separate concepts:
   creating a new preview.
 - If Wrangler reports a successful production write but durable deployment
   identity verification fails, AgentOps writes a terminal mode-`0600` failure
-  report and requires manual Cloudflare state inspection before any retry.
+  report and requires manual Cloudflare state inspection before any retry. If
+  the primary report root is unavailable, it writes to a private sibling
+  `emergency-reports` directory and prints that path.
 
 AgentOps does not install dependencies, run Wrangler login, stage/commit/push
 Git changes, create secrets, apply D1 migrations, or infer a rollback target.
 Do not place API tokens, OAuth credentials, `.dev.vars` values, secret values,
 or raw command output in inventory files, command arguments, or reports.
+Preview output masks the Cloudflare account ID; its complete value remains only
+in the validated runtime configuration and private operation report.
 
 ## Encrypted Database Recovery
 

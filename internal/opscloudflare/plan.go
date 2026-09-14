@@ -28,6 +28,8 @@ type PlanRequest struct {
 	RequestedVersion      string
 	Git                   opsgit.Evidence
 	Preflight             Request
+	RepositorySourcePath  string
+	DeploymentInputSHA256 string
 	RequireCommittedScope bool
 }
 
@@ -43,6 +45,7 @@ type CloudflareDeployPlan struct {
 	BaseCommit            string         `json:"base_commit"`
 	ScopeState            string         `json:"scope_state"`
 	ScopeContentSHA256    string         `json:"scope_content_sha256"`
+	DeploymentInputSHA256 string         `json:"deployment_input_sha256"`
 	ScopeEntries          []opsgit.Entry `json:"scope_entries,omitempty"`
 	RequireCommittedScope bool           `json:"require_committed_scope"`
 	DryRunVerified        bool           `json:"dry_run_verified"`
@@ -80,6 +83,7 @@ func CreatePlan(ctx context.Context, executor opsexec.Executor, request PlanRequ
 		WranglerVersion:      preflight.WranglerVersion,
 		BaseCommit:           request.Git.BaseCommit, ScopeState: request.Git.State,
 		ScopeContentSHA256:    request.Git.ContentSHA256,
+		DeploymentInputSHA256: request.DeploymentInputSHA256,
 		ScopeEntries:          append([]opsgit.Entry(nil), request.Git.Entries...),
 		RequireCommittedScope: request.RequireCommittedScope,
 		Blocked:               blocked, SourcePath: request.Preflight.SourcePath, Timeout: request.Preflight.Timeout,
@@ -119,7 +123,11 @@ func validatePlanRequest(request PlanRequest) error {
 	if err != nil {
 		return errors.New("Cloudflare Git repository root is unavailable")
 	}
-	resolvedSource, err := filepath.EvalSymlinks(request.Preflight.SourcePath)
+	sourceForBoundary := request.RepositorySourcePath
+	if sourceForBoundary == "" {
+		sourceForBoundary = request.Preflight.SourcePath
+	}
+	resolvedSource, err := filepath.EvalSymlinks(sourceForBoundary)
 	if err != nil {
 		return errors.New("Cloudflare source path is unavailable")
 	}
@@ -129,6 +137,9 @@ func validatePlanRequest(request PlanRequest) error {
 	}
 	if !commitPattern.MatchString(request.Git.BaseCommit) || !lowercaseSHA256Pattern.MatchString(request.Git.ContentSHA256) {
 		return errors.New("Cloudflare Git evidence is invalid")
+	}
+	if request.DeploymentInputSHA256 != "" && !lowercaseSHA256Pattern.MatchString(request.DeploymentInputSHA256) {
+		return errors.New("Cloudflare deployment input evidence is invalid")
 	}
 	if request.Git.State != opsgit.StateClean && request.Git.State != opsgit.StateDirty {
 		return errors.New("Cloudflare Git scope state is invalid")

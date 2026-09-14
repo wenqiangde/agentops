@@ -158,6 +158,9 @@ func TestOpsRollbackCloudflarePreviewConfirmHealthAndReport(t *testing.T) {
 	if !strings.Contains(preview.String(), `"target_version_id": "`+target+`"`) || !strings.Contains(preview.String(), "preview-digest: ") {
 		t.Fatalf("preview=%s", preview.String())
 	}
+	if strings.Contains(preview.String(), "0123456789abcdef0123456789abcdef") || !strings.Contains(preview.String(), "012345...cdef") {
+		t.Fatalf("preview did not minimize account identity: %s", preview.String())
+	}
 	if hasCloudflareRollback(previewExecutor.requests) {
 		t.Fatalf("preview executed rollback: %+v", previewExecutor.requests)
 	}
@@ -228,6 +231,33 @@ func TestOpsRollbackWritesFailureReportWhenActiveIdentityLookupFails(t *testing.
 	if strings.Contains(stdout.String()+stderr.String()+report.Error, "private") || strings.Contains(stdout.String()+stderr.String()+report.Error, "token=") {
 		t.Fatalf("private output leaked: out=%q err=%q report=%+v", stdout.String(), stderr.String(), report)
 	}
+}
+
+func TestOpsRollbackUsesEmergencyReportWhenPrimaryReportRootIsUnavailable(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+	target := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	args := []string{"ops", "rollback", "example-relay", "--environment", "production", "--version", target}
+	previewExecutor := successfulCLICloudflareRollbackExecutor(target)
+	stubCLICloudflareExecutor(t, previewExecutor)
+	var preview, previewErr bytes.Buffer
+	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
+		t.Fatalf("preview code=%d err=%q", code, previewErr.String())
+	}
+	if err := os.WriteFile(p.OpsReportRoot, []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	confirmedExecutor := successfulCLICloudflareRollbackExecutor(target)
+	confirmedExecutor.results = append(confirmedExecutor.results, opsexec.Result{ExitCode: 0}, opsexec.Result{ExitCode: 1})
+	stubCLICloudflareExecutor(t, confirmedExecutor)
+	var stdout, stderr bytes.Buffer
+	confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
+	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "emergency-reports") {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
+	}
+	fallback := filepath.Join(filepath.Dir(p.OpsReportRoot), "emergency-reports")
+	_ = readOnlyCloudflareReport(t, fallback)
 }
 
 func hasCloudflareRollback(requests []opsexec.Request) bool {
