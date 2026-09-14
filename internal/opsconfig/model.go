@@ -33,6 +33,7 @@ type Service struct {
 	ID              string                    `yaml:"id"`
 	Language        string                    `yaml:"language"`
 	Source          Source                    `yaml:"source"`
+	Deployment      Deployment                `yaml:"deployment,omitempty"`
 	Build           Build                     `yaml:"build"`
 	Environments    map[string]Environment    `yaml:"environments"`
 	Data            Data                      `yaml:"data,omitempty"`
@@ -41,8 +42,14 @@ type Service struct {
 }
 
 type Source struct {
-	Path       string `yaml:"path"`
-	Repository string `yaml:"repository"`
+	Path            string   `yaml:"path"`
+	Repository      string   `yaml:"repository"`
+	RepositoryRoot  string   `yaml:"repositoryRoot,omitempty"`
+	DeploymentScope []string `yaml:"deploymentScope,omitempty"`
+}
+
+type Deployment struct {
+	RequireCommittedScope bool `yaml:"requireCommittedScope"`
 }
 
 type Build struct {
@@ -75,6 +82,7 @@ type Environment struct {
 	ShutdownSignal string         `yaml:"shutdownSignal,omitempty"`
 	Logs           string         `yaml:"logs,omitempty"`
 	Worker         string         `yaml:"worker,omitempty"`
+	AccountID      string         `yaml:"accountId,omitempty"`
 	WranglerConfig string         `yaml:"wranglerConfig,omitempty"`
 	Config         ConfigContract `yaml:"config,omitempty"`
 	Health         Health         `yaml:"health,omitempty"`

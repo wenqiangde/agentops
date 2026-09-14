@@ -28,6 +28,7 @@ var sshAliasPattern = regexp.MustCompile(SSHAliasPattern)
 var configOwnerPattern = regexp.MustCompile(ConfigOwnerPattern)
 var processCommandPattern = regexp.MustCompile(ProcessCommandPattern)
 var cloudflareWorkerPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+var cloudflareAccountIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func validateServices(services []Service, hosts map[string]Host) []Issue {
 	byID := make(map[string][]Service)
@@ -167,6 +168,44 @@ func validateServiceIdentity(service Service) []Issue {
 	if service.Source.Path != "" && !isCanonicalSourcePath(service.Source.Path) {
 		issues = append(issues, issue(service, "source.path", "must be a canonical absolute path other than filesystem root without control characters"))
 	}
+	issues = append(issues, validateDeploymentSource(service)...)
+	return issues
+}
+
+func validateDeploymentSource(service Service) []Issue {
+	root := service.Source.RepositoryRoot
+	scopes := service.Source.DeploymentScope
+	cloudflare := service.Environments[EnvironmentProduction].Kind == EnvironmentKindCloudflareWorkers
+	var issues []Issue
+	if root == "" && len(scopes) == 0 && !cloudflare {
+		return issues
+	}
+	if !isCanonicalSourcePath(root) {
+		issues = append(issues, issue(service, "source.repositoryRoot", "must be a canonical absolute path other than filesystem root"))
+	} else if service.Source.Path != root && !strings.HasPrefix(service.Source.Path, root+string(filepath.Separator)) {
+		issues = append(issues, issue(service, "source.path", "must be within source.repositoryRoot"))
+	}
+	if len(scopes) == 0 {
+		issues = append(issues, issue(service, "source.deploymentScope", "must contain at least one path"))
+		return issues
+	}
+	cleanScopes := make([]string, 0, len(scopes))
+	for index, scope := range scopes {
+		clean := filepath.Clean(scope)
+		if scope == "" || filepath.IsAbs(scope) || clean != scope || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || strings.ContainsAny(scope, "\r\n\x00") {
+			issues = append(issues, issue(service, fmt.Sprintf("source.deploymentScope.%d", index), "must be a clean relative path within source.repositoryRoot"))
+			continue
+		}
+		cleanScopes = append(cleanScopes, clean)
+	}
+	for left := 0; left < len(cleanScopes); left++ {
+		for right := left + 1; right < len(cleanScopes); right++ {
+			if cleanScopes[left] == cleanScopes[right] || strings.HasPrefix(cleanScopes[left], cleanScopes[right]+string(filepath.Separator)) || strings.HasPrefix(cleanScopes[right], cleanScopes[left]+string(filepath.Separator)) {
+				issues = append(issues, issue(service, "source.deploymentScope", "must contain unique non-overlapping paths"))
+				return issues
+			}
+		}
+	}
 	return issues
 }
 
@@ -219,6 +258,9 @@ func validateCloudflareEnvironment(service Service, name, prefix string, environ
 		if environment.WranglerConfig != "" {
 			issues = append(issues, issue(service, prefix+"wranglerConfig", "is only allowed for cloudflare-workers"))
 		}
+		if environment.AccountID != "" {
+			issues = append(issues, issue(service, prefix+"accountId", "is only allowed for cloudflare-workers"))
+		}
 		return issues
 	}
 	if name != EnvironmentProduction {
@@ -235,6 +277,9 @@ func validateCloudflareEnvironment(service Service, name, prefix string, environ
 	}
 	if !cloudflareWorkerPattern.MatchString(environment.Worker) {
 		issues = append(issues, issue(service, prefix+"worker", "must be a safe Cloudflare Worker name"))
+	}
+	if !cloudflareAccountIDPattern.MatchString(environment.AccountID) {
+		issues = append(issues, issue(service, prefix+"accountId", "must be a 32 lowercase hexadecimal character Cloudflare account ID"))
 	}
 	config := filepath.Clean(environment.WranglerConfig)
 	if environment.WranglerConfig == "" || filepath.IsAbs(environment.WranglerConfig) || config != environment.WranglerConfig || config == "." || config == ".." || strings.HasPrefix(config, ".."+string(filepath.Separator)) {

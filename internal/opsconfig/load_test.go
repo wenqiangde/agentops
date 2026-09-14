@@ -284,6 +284,12 @@ language: typescript
 source:
   path: /Users/example/workspace/edge-relay
   repository: git@github.com:example/edge-relay.git
+  repositoryRoot: /Users/example/workspace
+  deploymentScope:
+    - edge-relay
+    - edge-admin
+deployment:
+  requireCommittedScope: false
 environments:
   local:
     kind: local
@@ -292,6 +298,7 @@ environments:
     kind: cloudflare-workers
     runner: manual
     worker: edge-relay
+    accountId: 0123456789abcdef0123456789abcdef
     wranglerConfig: wrangler.jsonc
     health:
       type: http
@@ -305,8 +312,12 @@ environments:
 		t.Fatalf("issues=%+v", issues)
 	}
 	production := inv.Services["edge-relay"].Environments[opsconfig.EnvironmentProduction]
-	if production.Kind != opsconfig.EnvironmentKindCloudflareWorkers || production.Worker != "edge-relay" || production.WranglerConfig != "wrangler.jsonc" {
+	if production.Kind != opsconfig.EnvironmentKindCloudflareWorkers || production.Worker != "edge-relay" || production.AccountID != "0123456789abcdef0123456789abcdef" || production.WranglerConfig != "wrangler.jsonc" {
 		t.Fatalf("production=%+v", production)
+	}
+	loaded := inv.Services["edge-relay"]
+	if loaded.Source.RepositoryRoot != "/Users/example/workspace" || !reflect.DeepEqual(loaded.Source.DeploymentScope, []string{"edge-relay", "edge-admin"}) || loaded.Deployment.RequireCommittedScope {
+		t.Fatalf("deployment identity=%+v policy=%+v", loaded.Source, loaded.Deployment)
 	}
 }
 
@@ -334,6 +345,109 @@ environments:
 	assertIssue(t, issues, "services/invalid-worker.yaml", "environments.production.worker")
 	assertIssue(t, issues, "services/invalid-worker.yaml", "environments.production.wranglerConfig")
 	assertInvalidAbsentWithHealthySibling(t, inv, "invalid-worker", "demo-api")
+}
+
+func TestLoadRejectsInvalidCloudflareAccountID(t *testing.T) {
+	root := copyValidInventory(t)
+	service := cloudflareService("invalid-account")
+	service = strings.Replace(service, "accountId: 0123456789abcdef0123456789abcdef", "accountId: token-like-value", 1)
+	writeFile(t, filepath.Join(root, "services", "invalid-account.yaml"), service)
+
+	inv, issues := opsconfig.Load(root)
+	assertIssueContains(t, issues, "services/invalid-account.yaml", "environments.production.accountId", "32 lowercase hexadecimal")
+	assertInvalidAbsentWithHealthySibling(t, inv, "invalid-account", "demo-api")
+}
+
+func TestLoadRejectsUnsafeDeploymentScope(t *testing.T) {
+	tests := []struct {
+		name        string
+		replacement string
+		field       string
+	}{
+		{name: "relative repository root", replacement: "repositoryRoot: workspace", field: "source.repositoryRoot"},
+		{name: "source outside repository root", replacement: "path: /Users/example/other/edge-relay", field: "source.path"},
+		{name: "scope traversal", replacement: "    - ../edge-relay\n    - edge-admin", field: "source.deploymentScope.0"},
+		{name: "duplicate scope", replacement: "    - edge-relay\n    - edge-relay", field: "source.deploymentScope"},
+		{name: "overlapping scope", replacement: "    - edge-relay\n    - edge-relay/admin", field: "source.deploymentScope"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := copyValidInventory(t)
+			service := cloudflareService("unsafe-scope")
+			switch tt.name {
+			case "relative repository root":
+				service = strings.Replace(service, "repositoryRoot: /Users/example/workspace", tt.replacement, 1)
+			case "source outside repository root":
+				service = strings.Replace(service, "path: /Users/example/workspace/edge-relay", tt.replacement, 1)
+			default:
+				service = strings.Replace(service, "    - edge-relay\n    - edge-admin", tt.replacement, 1)
+			}
+			writeFile(t, filepath.Join(root, "services", "unsafe-scope.yaml"), service)
+
+			inv, issues := opsconfig.Load(root)
+			assertIssue(t, issues, "services/unsafe-scope.yaml", tt.field)
+			assertInvalidAbsentWithHealthySibling(t, inv, "unsafe-scope", "demo-api")
+		})
+	}
+}
+
+func TestLoadRejectsCloudflareAndSSHFieldMixing(t *testing.T) {
+	tests := []struct {
+		name    string
+		service string
+		field   string
+	}{
+		{
+			name:    "Cloudflare account on SSH",
+			service: strings.Replace(validService("mixed-ssh"), "    runner: systemd", "    accountId: 0123456789abcdef0123456789abcdef\n    runner: systemd", 1),
+			field:   "environments.production.accountId",
+		},
+		{
+			name:    "SSH host on Cloudflare",
+			service: strings.Replace(cloudflareService("mixed-cloudflare"), "  production:\n    kind: cloudflare-workers\n    runner: manual", "  production:\n    kind: cloudflare-workers\n    host: prod-demo\n    runner: manual", 1),
+			field:   "environments.production.host",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := copyValidInventory(t)
+			id := "mixed-ssh"
+			if strings.Contains(tt.service, "id: mixed-cloudflare") {
+				id = "mixed-cloudflare"
+			}
+			writeFile(t, filepath.Join(root, "services", id+".yaml"), tt.service)
+
+			inv, issues := opsconfig.Load(root)
+			assertIssue(t, issues, "services/"+id+".yaml", tt.field)
+			assertInvalidAbsentWithHealthySibling(t, inv, id, "demo-api")
+		})
+	}
+}
+
+func cloudflareService(id string) string {
+	return `version: 1
+id: ` + id + `
+language: typescript
+source:
+  path: /Users/example/workspace/edge-relay
+  repository: git@github.com:example/edge-relay.git
+  repositoryRoot: /Users/example/workspace
+  deploymentScope:
+    - edge-relay
+    - edge-admin
+deployment:
+  requireCommittedScope: true
+environments:
+  local:
+    kind: local
+    runner: manual
+  production:
+    kind: cloudflare-workers
+    runner: manual
+    worker: edge-relay
+    accountId: 0123456789abcdef0123456789abcdef
+    wranglerConfig: wrangler.jsonc
+`
 }
 
 func TestLoadRejectsPartialBuildConfiguration(t *testing.T) {
