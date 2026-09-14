@@ -276,6 +276,66 @@ func TestLoadAcceptsReadOnlyServiceWithoutBuild(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsCloudflareWorkersProductionEnvironment(t *testing.T) {
+	root := copyValidInventory(t)
+	service := `version: 1
+id: edge-relay
+language: typescript
+source:
+  path: /Users/example/workspace/edge-relay
+  repository: git@github.com:example/edge-relay.git
+environments:
+  local:
+    kind: local
+    runner: manual
+  production:
+    kind: cloudflare-workers
+    runner: manual
+    worker: edge-relay
+    wranglerConfig: wrangler.jsonc
+    health:
+      type: http
+      url: https://api.example.test/health
+      successStatuses: [200]
+`
+	writeFile(t, filepath.Join(root, "services", "edge-relay.yaml"), service)
+
+	inv, issues := opsconfig.Load(root)
+	if len(issues) != 0 {
+		t.Fatalf("issues=%+v", issues)
+	}
+	production := inv.Services["edge-relay"].Environments[opsconfig.EnvironmentProduction]
+	if production.Kind != opsconfig.EnvironmentKindCloudflareWorkers || production.Worker != "edge-relay" || production.WranglerConfig != "wrangler.jsonc" {
+		t.Fatalf("production=%+v", production)
+	}
+}
+
+func TestLoadRejectsIncompleteCloudflareWorkersIdentity(t *testing.T) {
+	root := copyValidInventory(t)
+	service := `version: 1
+id: invalid-worker
+language: typescript
+source:
+  path: /Users/example/workspace/edge-relay
+  repository: git@github.com:example/edge-relay.git
+environments:
+  local:
+    kind: local
+    runner: manual
+  production:
+    kind: cloudflare-workers
+    runner: manual
+    worker: ''
+    wranglerConfig: ../wrangler.jsonc
+`
+	writeFile(t, filepath.Join(root, "services", "invalid-worker.yaml"), service)
+
+	inv, issues := opsconfig.Load(root)
+	assertIssue(t, issues, "services/invalid-worker.yaml", "environments.production.worker")
+	assertIssue(t, issues, "services/invalid-worker.yaml", "environments.production.wranglerConfig")
+	assertInvalidAbsentWithHealthySibling(t, inv, "invalid-worker", "demo-api")
+}
+
 func TestLoadRejectsPartialBuildConfiguration(t *testing.T) {
 	root := copyValidInventory(t)
 	service := strings.Replace(validService("partial-build"), "  manifest: dist/demo.manifest.json\n", "", 1)

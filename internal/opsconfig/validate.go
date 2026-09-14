@@ -27,6 +27,7 @@ var durationPattern = regexp.MustCompile(DurationPattern)
 var sshAliasPattern = regexp.MustCompile(SSHAliasPattern)
 var configOwnerPattern = regexp.MustCompile(ConfigOwnerPattern)
 var processCommandPattern = regexp.MustCompile(ProcessCommandPattern)
+var cloudflareWorkerPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 func validateServices(services []Service, hosts map[string]Host) []Issue {
 	byID := make(map[string][]Service)
@@ -179,14 +180,13 @@ func isCanonicalSourcePath(value string) bool {
 func validateEnvironment(service Service, name string, environment Environment, hosts map[string]Host) []Issue {
 	prefix := "environments." + name + "."
 	var issues []Issue
-	wantKind := EnvironmentKindLocal
-	if name == EnvironmentProduction {
-		wantKind = EnvironmentKindSSH
+	if name == EnvironmentLocal && environment.Kind != EnvironmentKindLocal {
+		issues = append(issues, issue(service, prefix+"kind", fmt.Sprintf("must be %q", EnvironmentKindLocal)))
 	}
-	if environment.Kind != wantKind {
-		issues = append(issues, issue(service, prefix+"kind", fmt.Sprintf("must be %q", wantKind)))
+	if name == EnvironmentProduction && environment.Kind != EnvironmentKindSSH && environment.Kind != EnvironmentKindCloudflareWorkers {
+		issues = append(issues, issue(service, prefix+"kind", fmt.Sprintf("must be %q or %q", EnvironmentKindSSH, EnvironmentKindCloudflareWorkers)))
 	}
-	if name == EnvironmentProduction {
+	if name == EnvironmentProduction && environment.Kind == EnvironmentKindSSH {
 		host, exists := hosts[environment.Host]
 		if environment.Host == "" || !exists {
 			issues = append(issues, issue(service, prefix+"host", fmt.Sprintf("unknown host %q", environment.Host)))
@@ -196,7 +196,7 @@ func validateEnvironment(service Service, name string, environment Environment, 
 		if !isProductionRootAllowed(environment.Root, host.AllowedRoots) {
 			issues = append(issues, issue(service, prefix+"root", "must be a canonical absolute path below an allowed root"))
 		}
-	} else {
+	} else if name == EnvironmentLocal {
 		if environment.Host != "" {
 			issues = append(issues, issue(service, prefix+"host", "is only allowed for production"))
 		}
@@ -204,8 +204,42 @@ func validateEnvironment(service Service, name string, environment Environment, 
 			issues = append(issues, issue(service, prefix+"root", "is only allowed for production"))
 		}
 	}
+	issues = append(issues, validateCloudflareEnvironment(service, name, prefix, environment)...)
 	issues = append(issues, validateRunner(service, name, prefix, environment)...)
 	issues = append(issues, validateHealth(service, prefix, environment.Health)...)
+	return issues
+}
+
+func validateCloudflareEnvironment(service Service, name, prefix string, environment Environment) []Issue {
+	var issues []Issue
+	if environment.Kind != EnvironmentKindCloudflareWorkers {
+		if environment.Worker != "" {
+			issues = append(issues, issue(service, prefix+"worker", "is only allowed for cloudflare-workers"))
+		}
+		if environment.WranglerConfig != "" {
+			issues = append(issues, issue(service, prefix+"wranglerConfig", "is only allowed for cloudflare-workers"))
+		}
+		return issues
+	}
+	if name != EnvironmentProduction {
+		issues = append(issues, issue(service, prefix+"kind", "cloudflare-workers is only allowed for production"))
+	}
+	if environment.Host != "" {
+		issues = append(issues, issue(service, prefix+"host", "is not allowed for cloudflare-workers"))
+	}
+	if environment.Root != "" {
+		issues = append(issues, issue(service, prefix+"root", "is not allowed for cloudflare-workers"))
+	}
+	if environment.Runner != RunnerManual {
+		issues = append(issues, issue(service, prefix+"runner", "must be manual for cloudflare-workers"))
+	}
+	if !cloudflareWorkerPattern.MatchString(environment.Worker) {
+		issues = append(issues, issue(service, prefix+"worker", "must be a safe Cloudflare Worker name"))
+	}
+	config := filepath.Clean(environment.WranglerConfig)
+	if environment.WranglerConfig == "" || filepath.IsAbs(environment.WranglerConfig) || config != environment.WranglerConfig || config == "." || config == ".." || strings.HasPrefix(config, ".."+string(filepath.Separator)) {
+		issues = append(issues, issue(service, prefix+"wranglerConfig", "must be a clean relative path within the source root"))
+	}
 	return issues
 }
 

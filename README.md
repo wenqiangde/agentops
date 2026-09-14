@@ -3,6 +3,8 @@
 AgentOps is an independent command-line tool for operating application services.
 It validates service inventories, builds release artifacts, checks health,
 deploys releases, creates encrypted database backups, and performs rollbacks.
+Its inventory can also represent observe-only Cloudflare Workers without
+inventing SSH hosts or server paths.
 
 AgentOps is developed and released independently from AgentSetup. It does not
 read AgentSetup project or registry configuration.

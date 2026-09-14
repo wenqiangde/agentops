@@ -6,8 +6,9 @@ const (
 	EnvironmentLocal      = "local"
 	EnvironmentProduction = "production"
 
-	EnvironmentKindLocal = "local"
-	EnvironmentKindSSH   = "ssh"
+	EnvironmentKindLocal             = "local"
+	EnvironmentKindSSH               = "ssh"
+	EnvironmentKindCloudflareWorkers = "cloudflare-workers"
 
 	RunnerSystemd = "systemd"
 	RunnerPHPFPM  = "php-fpm"
@@ -17,7 +18,7 @@ const (
 )
 
 var (
-	EnvironmentKinds = []string{EnvironmentKindLocal, EnvironmentKindSSH}
+	EnvironmentKinds = []string{EnvironmentKindLocal, EnvironmentKindSSH, EnvironmentKindCloudflareWorkers}
 	RunnerKinds      = []string{RunnerSystemd, RunnerPHPFPM, RunnerPM2, RunnerProcess, RunnerManual}
 )
 
@@ -73,6 +74,8 @@ type Environment struct {
 	PIDFile        string         `yaml:"pidfile,omitempty"`
 	ShutdownSignal string         `yaml:"shutdownSignal,omitempty"`
 	Logs           string         `yaml:"logs,omitempty"`
+	Worker         string         `yaml:"worker,omitempty"`
+	WranglerConfig string         `yaml:"wranglerConfig,omitempty"`
 	Config         ConfigContract `yaml:"config,omitempty"`
 	Health         Health         `yaml:"health,omitempty"`
 }

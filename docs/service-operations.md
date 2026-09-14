@@ -1,7 +1,8 @@
 # Service Operations
 
 AgentOps manages a small inventory of independently deployed services. It
-supports only explicit `local` and `production` environments. It does not run a
+supports explicit `local` and `production` environments, including SSH-hosted
+services and observe-only Cloudflare Workers. It does not run a
 daemon, discover credentials, provision infrastructure, manage containers, or
 replace a full deployment platform.
 
@@ -46,6 +47,37 @@ source:
 
 `path` must be an absolute canonical path other than filesystem root. Build and
 deployment commands use it directly. `source.project` is not supported.
+
+An observe-only Cloudflare Worker uses its deployed Worker identity and a
+project-relative Wrangler configuration path. It does not require or permit a
+fabricated SSH host or server root:
+
+```yaml
+version: 1
+id: example-relay
+language: typescript
+source:
+  path: /Users/example/workspace/example-relay
+  repository: git@github.com:example/example.git
+environments:
+  local:
+    kind: local
+    runner: manual
+  production:
+    kind: cloudflare-workers
+    runner: manual
+    worker: example-relay
+    wranglerConfig: wrangler.jsonc
+    health:
+      type: http
+      url: https://api.example.com/health
+      successStatuses: [200]
+```
+
+This mode supports inventory validation, listing, inspection, and optional HTTP
+health checks. Managed build, deploy, rollback, and backup remain unavailable;
+use project-owned Wrangler commands until AgentOps can bind a Cloudflare
+deployment to durable version and rollback evidence.
 
 ## Hosts And Policies
 
@@ -163,7 +195,7 @@ agentops health all --environment production
 | `php-fpm` | `service`, `configOwner`, absolute `configPath` | Host capability `php-fpm`; `FragmentPath` and declared config ownership must match | Deploy and rollback use graceful reload of the declared service after identity validation |
 | `pm2` | `app`, `configOwner`, absolute `configPath` | Host capability `pm2`; machine-readable state and config ownership | Operate only the uniquely declared app |
 | `process` | `user`, safe `command`, `pidfile`, `logs`, graceful `shutdownSignal` | `start-stop-daemon`, owned regular pidfile, matching executable and user | Use the declared process identity and graceful signal |
-| `manual` | no lifecycle identity | Operator-owned process | Inspection reports `manual`; automatic lifecycle writes are rejected |
+| `manual` | no lifecycle identity | Operator-owned process or Cloudflare Worker | Inspection reports `manual`; automatic lifecycle writes are rejected |
 
 Every production environment requires a canonical absolute `root` strictly below one of its host's `allowedRoots`. When `allowedRoots` is omitted, it defaults to `[/opt/apps]` for backward compatibility. Declare an existing layout explicitly, for example `allowedRoots: [/home/maidou/projects/www]`; `/` and an allowed root itself are never valid service roots. Local environments prohibit `root`. A local process `command` must be a canonical absolute path; production may use a safe absolute command or a command relative to its `root`. Production `systemd`, `php-fpm`, and `pm2` runners must be supported by the selected host capability list. Pidfile and log paths must be canonical absolute paths. Runner inspection never treats ambiguous or malformed state as healthy.
 

@@ -481,6 +481,10 @@ func opsList(p paths.Paths, args []string, stdout io.Writer, stderr io.Writer) i
 			continue
 		}
 		local := service.Environments[opsconfig.EnvironmentLocal]
+		if production.Kind == opsconfig.EnvironmentKindCloudflareWorkers {
+			fmt.Fprintf(stdout, "%s\t%s\tlocal=%s\tproduction=%s\tworker=%s\n", service.ID, service.Language, local.Runner, production.Runner, production.Worker)
+			continue
+		}
 		fmt.Fprintf(stdout, "%s\t%s\tlocal=%s\tproduction=%s\thost=%s\n", service.ID, service.Language, local.Runner, production.Runner, production.Host)
 	}
 	printOpsIssues(stderr, issues)
@@ -532,6 +536,9 @@ func opsInspect(p paths.Paths, args []string, stdout io.Writer, stderr io.Writer
 		}
 		if item.Root != "" {
 			fmt.Fprintf(stdout, "root: %s\n", item.Root)
+		}
+		if item.Worker != "" {
+			fmt.Fprintf(stdout, "worker: %s\nwrangler-config: %s\n", item.Worker, item.WranglerConfig)
 		}
 		runnerEnvironment := item
 		var executor opsexec.Executor
