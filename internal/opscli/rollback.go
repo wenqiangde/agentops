@@ -2,14 +2,18 @@ package opscli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
 	"time"
 
+	"github.com/wenqiangde/agentops/internal/opscloudflare"
 	"github.com/wenqiangde/agentops/internal/opsconfig"
 	"github.com/wenqiangde/agentops/internal/opsdeploy"
 	"github.com/wenqiangde/agentops/internal/opsexec"
+	"github.com/wenqiangde/agentops/internal/opsgit"
+	"github.com/wenqiangde/agentops/internal/opshealth"
 	"github.com/wenqiangde/agentops/internal/opsreport"
 	"github.com/wenqiangde/agentops/internal/paths"
 )
@@ -35,6 +39,15 @@ func opsRollback(p paths.Paths, args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "agentops: unknown service: %s\n", serviceID)
 		}
 		return 1
+	}
+	cloudflareProduction, cloudflareFound := service.Environments[opsconfig.EnvironmentProduction]
+	if cloudflareFound && cloudflareProduction.Kind == opsconfig.EnvironmentKindCloudflareWorkers {
+		timeout, err := time.ParseDuration(inv.Policies.Execution.DefaultTimeout)
+		if err != nil || timeout <= 0 {
+			fmt.Fprintln(stderr, "agentops: invalid default operation timeout")
+			return 1
+		}
+		return opsCloudflareRollback(p.OpsReportRoot, service, cloudflareProduction, targetVersion, confirm, previewDigest, timeout, stdout, stderr)
 	}
 	if !service.BuildConfigured() {
 		fmt.Fprintln(stderr, "agentops: service has no managed build/deploy configuration")
@@ -118,6 +131,104 @@ func opsRollback(p paths.Paths, args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "rollback: succeeded")
 	fmt.Fprintf(stdout, "report-id: %s\nreport: %s\n", operationID, reportPath)
 	return 0
+}
+
+func opsCloudflareRollback(reportRoot string, service opsconfig.Service, production opsconfig.Environment, targetID string, confirm bool, previewDigest string, timeout time.Duration, stdout, stderr io.Writer) int {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	gitEvidence, err := opsgit.Inspect(ctx, opsgit.Request{RepositoryRoot: service.Source.RepositoryRoot, Scopes: service.Source.DeploymentScope})
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare rollback Git scope inspection failed")
+		return 1
+	}
+	plan, err := opscloudflare.CreateRollbackPlan(ctx, opsCloudflareExecutor(), opscloudflare.RollbackPlanRequest{
+		Service: service.ID, TargetID: targetID, Git: gitEvidence,
+		Preflight: opscloudflare.Request{
+			SourcePath: service.Source.Path, Worker: production.Worker, AccountID: production.AccountID,
+			WranglerConfig: production.WranglerConfig, Timeout: timeout,
+		},
+		RequireCommittedScope: service.Deployment.RequireCommittedScope,
+	})
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview failed")
+		return 1
+	}
+	encoded, err := json.MarshalIndent(plan, "", "  ")
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview encoding failed")
+		return 1
+	}
+	fmt.Fprintln(stdout, string(encoded))
+	if plan.Blocked {
+		fmt.Fprintf(stderr, "agentops: Cloudflare rollback preview blocked: %s\n", plan.BlockReason)
+		return 1
+	}
+	digest, err := opscloudflare.RollbackDigest(plan)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest failed")
+		return 1
+	}
+	fmt.Fprintf(stdout, "preview-digest: %s\n", digest)
+	if !confirm {
+		return 0
+	}
+	confirmed, err := opscloudflare.ConfirmRollbackPlan(plan, previewDigest)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest is stale")
+		return 1
+	}
+	started := time.Now().UTC()
+	result, err := opscloudflare.ApplyRollback(ctx, opsCloudflareExecutor(), confirmed)
+	if err != nil || !result.Success {
+		fmt.Fprintln(stdout, "rollback: failed")
+		fmt.Fprintln(stderr, "agentops: Cloudflare rollback apply failed")
+		return 1
+	}
+	health := opsHealthProbe(ctx, opsCloudflareExecutor(), production, production.Health, timeout)
+	finished := time.Now().UTC()
+	operationID, err := newOpsOperationID("cloudflare-rollback")
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare rollback report identity failed")
+		return 1
+	}
+	reportPath, err := opsreport.Write(reportRoot, cloudflareRollbackOperationReport(operationID, digest, plan, health, started, finished), nil)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare rollback report failed")
+		return 1
+	}
+	fmt.Fprintf(stdout, "deployment-id: %s\nversion-id: %s\n", result.DeploymentID, result.VersionID)
+	fmt.Fprintf(stdout, "report-id: %s\nreport: %s\n", operationID, reportPath)
+	if !health.Healthy {
+		fmt.Fprintln(stdout, "rollback: failed")
+		fmt.Fprintln(stderr, "agentops: Cloudflare rollback HTTP health check failed; inspect the operation report")
+		return 1
+	}
+	fmt.Fprintln(stdout, "rollback: succeeded")
+	return 0
+}
+
+func cloudflareRollbackOperationReport(operationID, digest string, plan opscloudflare.CloudflareRollbackPlan, health opshealth.Result, started, finished time.Time) opsreport.Report {
+	state := "healthy"
+	errorSummary := ""
+	if !health.Healthy {
+		state = "failed"
+		errorSummary = "HTTP health check failed"
+	}
+	previous := "multiple"
+	if len(plan.CurrentVersionIDs) == 1 {
+		previous = plan.CurrentVersionIDs[0]
+	}
+	return opsreport.Report{
+		OperationID: operationID, Actor: plan.AccountID, Service: plan.Service, Environment: plan.Environment, Host: plan.Worker,
+		PlanDigest: digest, PreviousVersion: previous, RequestedVersion: plan.TargetVersionID, ArtifactDigest: plan.ScopeContentSHA256,
+		Steps: []opsreport.StepResult{
+			{Order: 1, Kind: "cloudflare-rollback", Status: "succeeded", StartedAt: started, FinishedAt: finished},
+			{Order: 2, Kind: "active-deployment-verification", Status: "succeeded", StartedAt: started, FinishedAt: finished},
+			{Order: 3, Kind: "http-health", Status: state, StartedAt: started, FinishedAt: finished, Error: errorSummary},
+		},
+		Health:   opsreport.HealthEvidence{Type: health.Type, State: state, Healthy: health.Healthy, StatusCode: health.StatusCode, Detail: health.Detail},
+		Recovery: "not-applicable", Terminal: true, StartedAt: started, FinishedAt: finished, Error: errorSummary, ManualWork: "none",
+	}
 }
 
 func parseOpsRollbackArgs(args []string, stderr io.Writer) (string, string, bool, string, bool) {
