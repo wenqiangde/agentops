@@ -68,9 +68,10 @@ type ConfirmedRollbackPlan struct {
 }
 
 type RollbackResult struct {
-	Success      bool
-	DeploymentID string
-	VersionID    string
+	Success                  bool
+	ProductionWriteSucceeded bool
+	DeploymentID             string
+	VersionID                string
 }
 
 func ResolveRollbackTarget(ctx context.Context, executor opsexec.Executor, request RollbackTargetRequest) (RollbackTarget, error) {
@@ -211,11 +212,15 @@ func ApplyRollback(ctx context.Context, executor opsexec.Executor, confirmed Con
 	if result.Err != nil || result.TimedOut || result.ExitCode != 0 {
 		return RollbackResult{}, errors.New("Cloudflare Wrangler rollback failed")
 	}
+	writeResult := RollbackResult{ProductionWriteSucceeded: true}
 	current, err := readCurrentDeployment(ctx, executor, confirmed.Plan.SourcePath, confirmed.Plan.WranglerConfig, confirmed.Plan.Timeout)
 	if err != nil || len(current.Versions) != 1 || current.Versions[0].VersionID != confirmed.Plan.TargetVersionID || current.Versions[0].Percentage != 100 || current.ID == confirmed.Plan.CurrentDeploymentID {
-		return RollbackResult{}, errors.New("Cloudflare rollback active deployment verification failed")
+		return writeResult, errors.New("Cloudflare rollback active deployment verification failed")
 	}
-	return RollbackResult{Success: true, DeploymentID: current.ID, VersionID: current.Versions[0].VersionID}, nil
+	writeResult.Success = true
+	writeResult.DeploymentID = current.ID
+	writeResult.VersionID = current.Versions[0].VersionID
+	return writeResult, nil
 }
 
 type deploymentRecord struct {

@@ -90,7 +90,7 @@ func TestCreateRollbackPlanUsesOnlyMachineReadableIdentityReads(t *testing.T) {
 
 func TestConfirmRollbackPlanRejectsTargetSourceAndAccountDrift(t *testing.T) {
 	base := opscloudflare.CloudflareRollbackPlan{
-		Service: "preveal-relay", Environment: "production",
+		Service: "example-relay", Environment: "production",
 		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
 		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.35.0",
 		BaseCommit: strings.Repeat("2", 40), ScopeState: opsgit.StateClean, ScopeContentSHA256: strings.Repeat("3", 64),
@@ -291,7 +291,7 @@ func rollbackTargetRequest(target string) opscloudflare.RollbackTargetRequest {
 
 func sampleRollbackPlanRequest(root, target string) opscloudflare.RollbackPlanRequest {
 	return opscloudflare.RollbackPlanRequest{
-		Service: "preveal-relay", TargetID: target,
+		Service: "example-relay", TargetID: target,
 		Git: opsgit.Evidence{
 			RepositoryRoot: root, BaseCommit: strings.Repeat("2", 40), State: opsgit.StateClean,
 			ContentSHA256: strings.Repeat("3", 64),
@@ -305,7 +305,7 @@ func sampleRollbackPlanRequest(root, target string) opscloudflare.RollbackPlanRe
 
 func sampleCloudflareRollbackPlan() opscloudflare.CloudflareRollbackPlan {
 	return opscloudflare.CloudflareRollbackPlan{
-		Service: "preveal-relay", Environment: "production",
+		Service: "example-relay", Environment: "production",
 		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
 		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.35.0",
 		BaseCommit: strings.Repeat("2", 40), ScopeState: opsgit.StateClean, ScopeContentSHA256: strings.Repeat("3", 64),

@@ -34,12 +34,12 @@ func TestOpsDeployRoutesCloudflareWorkerToReadOnlyPreview(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	code, handled := executeRootCommand(p, []string{
-		"ops", "deploy", "preveal-relay", "--environment", "production", "--version", "2026.09.14-1",
+		"ops", "deploy", "example-relay", "--environment", "production", "--version", "2026.09.14-1",
 	}, &stdout, &stderr)
 	if !handled || code != 0 || stderr.Len() != 0 {
 		t.Fatalf("handled=%v code=%d out=%q err=%q", handled, code, stdout.String(), stderr.String())
 	}
-	for _, wanted := range []string{`"service": "preveal-relay"`, `"worker": "example-worker"`, "preview-digest: "} {
+	for _, wanted := range []string{`"service": "example-relay"`, `"worker": "example-worker"`, "preview-digest: "} {
 		if !strings.Contains(stdout.String(), wanted) {
 			t.Fatalf("preview missing %q: %s", wanted, stdout.String())
 		}
@@ -65,7 +65,7 @@ func TestOpsDeployRequiresConfirmAndExactDigestBeforeCloudflareProductionCommand
 	previewExecutor := successfulCLICloudflareExecutor()
 	stubCLICloudflareExecutor(t, previewExecutor)
 	var preview, previewErr bytes.Buffer
-	args := []string{"ops", "deploy", "preveal-relay", "--environment", "production", "--version", "2026.09.14-1"}
+	args := []string{"ops", "deploy", "example-relay", "--environment", "production", "--version", "2026.09.14-1"}
 	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
 		t.Fatalf("preview code=%d out=%q err=%q", code, preview.String(), previewErr.String())
 	}
@@ -124,7 +124,7 @@ func TestOpsDeployWritesBoundedFailureReportWhenCloudflareHTTPHealthFails(t *tes
 	p := opsTestPaths(t, "valid")
 	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
 	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
-	args := []string{"ops", "deploy", "preveal-relay", "--environment", "production", "--version", "2026.09.14-1"}
+	args := []string{"ops", "deploy", "example-relay", "--environment", "production", "--version", "2026.09.14-1"}
 	previewExecutor := successfulCLICloudflareExecutor()
 	stubCLICloudflareExecutor(t, previewExecutor)
 	var preview, previewErr bytes.Buffer
@@ -223,7 +223,7 @@ func TestOpsDeployRejectsCloudflareInputDriftBeforeProductionCommand(t *testing.
 			opsCloudflareExecutor = func() opsexec.Executor { return previewExecutor }
 			t.Cleanup(func() { opsCloudflareExecutor = original })
 
-			args := []string{"ops", "deploy", "preveal-relay", "--environment", "production", "--version", "2026.09.14-1"}
+			args := []string{"ops", "deploy", "example-relay", "--environment", "production", "--version", "2026.09.14-1"}
 			var preview, previewErr bytes.Buffer
 			if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
 				t.Fatalf("preview code=%d out=%q err=%q", code, preview.String(), previewErr.String())
@@ -251,6 +251,69 @@ func successfulCLICloudflareExecutor() *cliCloudflareExecutor {
 		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`},
 		{ExitCode: 0, Stdout: "dry-run"},
 	}}
+}
+
+func TestOpsDeployRejectsScopedDriftAfterConfirmationDryRun(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+	args := []string{"ops", "deploy", "example-relay", "--environment", "production", "--version", "2026.09.14-1"}
+	previewExecutor := successfulCLICloudflareExecutor()
+	stubCLICloudflareExecutor(t, previewExecutor)
+	var preview, previewErr bytes.Buffer
+	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
+		t.Fatalf("preview code=%d out=%q err=%q", code, preview.String(), previewErr.String())
+	}
+
+	confirmedExecutor := successfulCLICloudflareExecutor()
+	confirmedExecutor.afterRun = func(request opsexec.Request) {
+		if len(request.Args) > 1 && request.Args[0] == "deploy" && request.Args[1] == "--dry-run" {
+			writeCLIFile(t, filepath.Join(repositoryRoot, "relay", "src", "index.ts"), "changed after dry-run\n", 0o644)
+			confirmedExecutor.afterRun = nil
+		}
+	}
+	stubCLICloudflareExecutor(t, confirmedExecutor)
+	var stdout, stderr bytes.Buffer
+	confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
+	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "stale") {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
+	}
+	if hasCloudflareProductionDeploy(confirmedExecutor.requests) {
+		t.Fatalf("post-dry-run drift executed production deploy: %+v", confirmedExecutor.requests)
+	}
+}
+
+func TestOpsDeployWritesFailureReportWhenPostDeployIdentityLookupFails(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+	args := []string{"ops", "deploy", "example-relay", "--environment", "production", "--version", "2026.09.14-1"}
+	previewExecutor := successfulCLICloudflareExecutor()
+	stubCLICloudflareExecutor(t, previewExecutor)
+	var preview, previewErr bytes.Buffer
+	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
+		t.Fatalf("preview code=%d out=%q err=%q", code, preview.String(), previewErr.String())
+	}
+
+	confirmedExecutor := successfulCLICloudflareExecutor()
+	confirmedExecutor.results = append(confirmedExecutor.results,
+		opsexec.Result{ExitCode: 0, Stdout: `[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]`},
+		opsexec.Result{ExitCode: 0, Stdout: "private deploy output"},
+		opsexec.Result{ExitCode: 1, Stderr: "token=private"},
+	)
+	stubCLICloudflareExecutor(t, confirmedExecutor)
+	var stdout, stderr bytes.Buffer
+	confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
+	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
+	}
+	report := readOnlyCloudflareReport(t, p.OpsReportRoot)
+	if report.Error == "" || !report.Terminal || report.Steps[0].Status != "failed" {
+		t.Fatalf("report=%+v", report)
+	}
+	if strings.Contains(stdout.String()+stderr.String()+report.Error, "private") || strings.Contains(stdout.String()+stderr.String()+report.Error, "token=") {
+		t.Fatalf("private output leaked: out=%q err=%q report=%+v", stdout.String(), stderr.String(), report)
+	}
 }
 
 func stubCLICloudflareExecutor(t *testing.T, executor opsexec.Executor) {
@@ -312,6 +375,7 @@ func containsCLIArgument(arguments []string, wanted string) bool {
 type cliCloudflareExecutor struct {
 	requests []opsexec.Request
 	results  []opsexec.Result
+	afterRun func(opsexec.Request)
 }
 
 func (e *cliCloudflareExecutor) Run(_ context.Context, request opsexec.Request) opsexec.Result {
@@ -321,6 +385,9 @@ func (e *cliCloudflareExecutor) Run(_ context.Context, request opsexec.Request) 
 	}
 	result := e.results[0]
 	e.results = e.results[1:]
+	if e.afterRun != nil {
+		e.afterRun(request)
+	}
 	return result
 }
 
@@ -349,11 +416,11 @@ func newCLICloudflareRepository(t *testing.T) (string, string) {
 func writeCLICloudflareService(t *testing.T, operationsRoot, repositoryRoot, sourcePath string) {
 	t.Helper()
 	content := fmt.Sprintf(`version: 1
-id: preveal-relay
+id: example-relay
 language: typescript
 source:
   path: %s
-  repository: git@example.com:preveal.git
+  repository: git@example.com:example.git
   repositoryRoot: %s
   deploymentScope: [relay, admin]
 deployment:
@@ -373,7 +440,7 @@ environments:
       url: https://example.test/health
       successStatuses: [200, 204]
 `, sourcePath, repositoryRoot)
-	writeCLIFile(t, filepath.Join(operationsRoot, "services", "preveal-relay.yaml"), content, 0o644)
+	writeCLIFile(t, filepath.Join(operationsRoot, "services", "example-relay.yaml"), content, 0o644)
 }
 
 func writeCLIFile(t *testing.T, path, content string, mode os.FileMode) {

@@ -177,9 +177,16 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest is stale")
 		return 1
 	}
+	if err := revalidateCloudflareGitEvidence(ctx, service, gitEvidence); err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest is stale")
+		return 1
+	}
 	started := time.Now().UTC()
 	result, err := opscloudflare.ApplyRollback(ctx, opsCloudflareExecutor(), confirmed)
 	if err != nil || !result.Success {
+		if result.ProductionWriteSucceeded {
+			writeCloudflareRollbackFailureReport(reportRoot, digest, plan, started, time.Now().UTC(), stdout)
+		}
 		fmt.Fprintln(stdout, "rollback: failed")
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback apply failed")
 		return 1
@@ -205,6 +212,29 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 	}
 	fmt.Fprintln(stdout, "rollback: succeeded")
 	return 0
+}
+
+func writeCloudflareRollbackFailureReport(reportRoot, digest string, plan opscloudflare.CloudflareRollbackPlan, started, finished time.Time, stdout io.Writer) {
+	operationID, err := newOpsOperationID("cloudflare-rollback")
+	if err != nil {
+		return
+	}
+	previous := "multiple"
+	if len(plan.CurrentVersionIDs) == 1 {
+		previous = plan.CurrentVersionIDs[0]
+	}
+	report := opsreport.Report{
+		OperationID: operationID, Actor: plan.AccountID, Service: plan.Service, Environment: plan.Environment, Host: plan.Worker,
+		PlanDigest: digest, PreviousVersion: previous, RequestedVersion: plan.TargetVersionID, ArtifactDigest: plan.ScopeContentSHA256,
+		Steps:    []opsreport.StepResult{{Order: 1, Kind: "cloudflare-rollback", Status: "failed", StartedAt: started, FinishedAt: finished, Error: "active deployment verification failed"}},
+		Health:   opsreport.HealthEvidence{Type: "http", State: "not-checked", Healthy: false},
+		Recovery: "manual-review-required", Terminal: true, StartedAt: started, FinishedAt: finished,
+		Error: "active deployment verification failed", ManualWork: "inspect Cloudflare deployment state before retrying",
+	}
+	reportPath, err := opsreport.Write(reportRoot, report, nil)
+	if err == nil {
+		fmt.Fprintf(stdout, "report-id: %s\nreport: %s\n", operationID, reportPath)
+	}
 }
 
 func cloudflareRollbackOperationReport(operationID, digest string, plan opscloudflare.CloudflareRollbackPlan, health opshealth.Result, started, finished time.Time) opsreport.Report {

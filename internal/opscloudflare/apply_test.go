@@ -12,7 +12,7 @@ import (
 
 func TestApplyRequiresExactConfirmedDigestAndUsesProjectLocalWrangler(t *testing.T) {
 	plan := opscloudflare.CloudflareDeployPlan{
-		Service: "preveal-relay", Environment: "production", RequestedVersion: "2026.09.14-1",
+		Service: "example-relay", Environment: "production", RequestedVersion: "2026.09.14-1",
 		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
 		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64),
 		WranglerVersion: "4.35.0", BaseCommit: strings.Repeat("2", 40),
@@ -58,7 +58,7 @@ func TestApplyRequiresExactConfirmedDigestAndUsesProjectLocalWrangler(t *testing
 
 func TestApplyRejectsSuccessfulDeployWithoutNewDurableIdentity(t *testing.T) {
 	plan := opscloudflare.CloudflareDeployPlan{
-		Service: "preveal-relay", Environment: "production", RequestedVersion: "2026.09.14-1",
+		Service: "example-relay", Environment: "production", RequestedVersion: "2026.09.14-1",
 		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
 		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64),
 		WranglerVersion: "4.35.0", BaseCommit: strings.Repeat("2", 40),

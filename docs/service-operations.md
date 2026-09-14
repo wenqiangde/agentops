@@ -2,7 +2,7 @@
 
 AgentOps manages a small inventory of independently deployed services. It
 supports explicit `local` and `production` environments, including SSH-hosted
-services and observe-only Cloudflare Workers. It does not run a
+services and Cloudflare Workers. It does not run a
 daemon, discover credentials, provision infrastructure, manage containers, or
 replace a full deployment platform.
 
@@ -48,17 +48,23 @@ source:
 `path` must be an absolute canonical path other than filesystem root. Build and
 deployment commands use it directly. `source.project` is not supported.
 
-An observe-only Cloudflare Worker uses its deployed Worker identity and a
-project-relative Wrangler configuration path. It does not require or permit a
-fabricated SSH host or server root:
+A Cloudflare Worker uses its deployed Worker identity, repository-scoped input,
+and a project-relative Wrangler configuration path. It does not require or
+permit a fabricated SSH host or server root:
 
 ```yaml
 version: 1
 id: example-relay
 language: typescript
 source:
-  path: /Users/example/workspace/example-relay
+  path: /Users/example/workspace/example/example-relay
   repository: git@github.com:example/example.git
+  repositoryRoot: /Users/example/workspace/example
+  deploymentScope:
+    - example-relay
+    - example-admin
+deployment:
+  requireCommittedScope: false
 environments:
   local:
     kind: local
@@ -67,6 +73,7 @@ environments:
     kind: cloudflare-workers
     runner: manual
     worker: example-relay
+    accountId: 0123456789abcdef0123456789abcdef
     wranglerConfig: wrangler.jsonc
     health:
       type: http
@@ -74,10 +81,16 @@ environments:
       successStatuses: [200]
 ```
 
-This mode supports inventory validation, listing, inspection, and optional HTTP
-health checks. Managed build, deploy, rollback, and backup remain unavailable;
-use project-owned Wrangler commands until AgentOps can bind a Cloudflare
-deployment to durable version and rollback evidence.
+`source.path` must be inside `repositoryRoot`, and every deployment scope must
+be a clean repository-relative path. The Worker project must declare Wrangler
+in `package.json`, include a lockfile, and have an executable
+`node_modules/.bin/wrangler`. AgentOps never falls back to an unpinned global
+binary or `npx wrangler@latest`.
+
+This mode supports inventory validation, listing, inspection, HTTP health,
+preview-gated deployment, and version-based rollback. Cloudflare backup is not
+available. Worker writes require the exact preview digest and produce a private
+operation report.
 
 ## Hosts And Policies
 
@@ -123,7 +136,12 @@ backups:
 
 ## Service File
 
-`build` is optional for an observe-only service. Such a service can use `validate`, `list`, `inspect`, and `health`, while `build`, `deploy`, and `rollback` fail before any local or remote execution. When `build` is present, `adapter`, `command`, `artifact`, and `manifest` are all required; do not use placeholders for an existing in-place deployment workflow.
+`build` is optional. A build-less SSH service is observe-only: `build`,
+`deploy`, and `rollback` fail before local or remote execution. A Cloudflare
+Worker uses its project-local Wrangler workflow and therefore does not require
+the SSH artifact build contract. When `build` is present, `adapter`, `command`,
+`artifact`, and `manifest` are all required; do not use placeholders for an
+existing in-place deployment workflow.
 
 ```yaml
 version: 1
@@ -251,6 +269,93 @@ Nginx validation/reload and serving-path cutover remain separate operator-contro
 
 Binary rollback does not reverse database migrations. A rollback is blocked when data compatibility evidence is insufficient.
 
+## Cloudflare Worker Lifecycle
+
+For a configured Worker, deployment preview runs only bounded identity reads
+and the project-local dry run:
+
+```text
+node_modules/.bin/wrangler --version
+node_modules/.bin/wrangler whoami --account <account-id> --json
+node_modules/.bin/wrangler deploy --dry-run --config <file>
+```
+
+Generate and review a preview before every production write:
+
+```bash
+agentops deploy example-relay --environment production --version 2026.09.14-1
+agentops deploy example-relay --environment production --version 2026.09.14-1 \
+  --confirm --preview-digest <64-lowercase-hex>
+```
+
+The confirmed command repeats Git, Wrangler, account, config, and dry-run
+checks, then takes a second scoped Git snapshot immediately before the
+production command. It runs `wrangler deploy --config <file>` only when both
+snapshots match and the recomputed plan matches the supplied digest. The
+resolved `source.path` must also remain inside the resolved repository root;
+a symlink cannot redirect Wrangler outside that boundary. Success additionally requires one new
+machine-readable deployment UUID, valid version UUID evidence, configured HTTP
+health, and a mode-`0600` report. Raw Wrangler output is not report content.
+AgentOps compares machine-readable output from
+`wrangler deployments list --json --config <file>` before and after deployment;
+a zero exit code without exactly one new durable deployment is a failure.
+
+Rollback requires an explicit Worker version UUID or a deployment UUID that
+maps unambiguously to one version at 100% traffic:
+
+```bash
+agentops rollback example-relay --environment production \
+  --version aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+agentops rollback example-relay --environment production \
+  --version aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa \
+  --confirm --preview-digest <64-lowercase-hex>
+```
+
+AgentOps resolves the target from Wrangler JSON, rejects an already-active or
+ambiguous target, and verifies that rollback created a new deployment serving
+the selected version at 100% before checking HTTP health. The command does not
+restore KV, D1, R2, Durable Objects, queues, or other bound resource state.
+Target discovery uses `versions list --json` and, when needed,
+`deployments list --json`. Confirmation runs
+`rollback <version-id> --message <bounded-message> --config <file>`, then
+verifies `deployments status --json`.
+
+### Git Scope And Frozen Input
+
+Repository cleanliness and frozen deployment input are separate concepts:
+
+- Changes outside `deploymentScope` do not affect this Worker plan.
+- `requireCommittedScope: true` blocks when any scoped path differs from the
+  base commit.
+- `requireCommittedScope: false` permits scoped tracked or untracked changes,
+  but their paths, kinds, and content hashes are included in the preview
+  digest. It does not mean "deploy whatever exists later."
+- Any scoped bytes, Wrangler config, account membership, Worker identity,
+  Wrangler version, base commit, or requested version change requires a new
+  preview and digest.
+
+### Remediation And Stop Conditions
+
+- Missing installed Wrangler with a declared dependency and lockfile: run
+  `npm ci` in `source.path`, then preview again.
+- Authentication or account-membership failure: use Wrangler to authenticate
+  the intended operator account, then verify that AgentOps `accountId`, the
+  Wrangler config `account_id`, and authenticated membership agree.
+- Dirty scope blocked by policy: commit the intended scoped change or obtain an
+  approved configuration change to `requireCommittedScope`; never bypass the
+  digest.
+- Stale digest, missing target, malformed JSON identity, failed health, or
+  report persistence failure: stop and inspect the bounded error/report before
+  creating a new preview.
+- If Wrangler reports a successful production write but durable deployment
+  identity verification fails, AgentOps writes a terminal mode-`0600` failure
+  report and requires manual Cloudflare state inspection before any retry.
+
+AgentOps does not install dependencies, run Wrangler login, stage/commit/push
+Git changes, create secrets, apply D1 migrations, or infer a rollback target.
+Do not place API tokens, OAuth credentials, `.dev.vars` values, secret values,
+or raw command output in inventory files, command arguments, or reports.
+
 ## Encrypted Database Recovery
 
 Backup also uses preview and exact-digest confirmation. It checks `age` remotely, streams `mysqldump --single-transaction --quick` directly into recipient encryption, transfers only the `.age` archive, and compares server/local SHA-256 digests. No plaintext SQL dump is written.
@@ -275,7 +380,7 @@ Never copy the age private identity to production. MySQL option files must be pr
 
 ## Stop Conditions And Evidence
 
-AgentSetup stops before writes when inventory validation fails, the SSH alias or runner identity is ambiguous, credentials appear in configuration, build evidence is stale, remote preflight fails, a digest is stale, migration compatibility is missing, recovery identity is unsafe, or a report cannot be persisted.
+AgentOps stops before writes when inventory validation fails, the SSH alias or runner identity is ambiguous, credentials appear in configuration, build evidence is stale, remote preflight fails, a digest is stale, migration compatibility is missing, recovery identity is unsafe, or a report cannot be persisted.
 
 Private JSON reports are written under `operations/reports` with mode `0600`. They contain bounded step, health, digest, recovery, and timing evidence without raw command output or credential values.
 

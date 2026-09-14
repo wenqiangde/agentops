@@ -16,9 +16,10 @@ type ConfirmedPlan struct {
 }
 
 type ApplyResult struct {
-	Success      bool
-	DeploymentID string
-	VersionIDs   []string
+	Success                  bool
+	ProductionWriteSucceeded bool
+	DeploymentID             string
+	VersionIDs               []string
 }
 
 var cloudflareUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -60,15 +61,19 @@ func Apply(ctx context.Context, executor opsexec.Executor, confirmed ConfirmedPl
 	if result.Err != nil || result.TimedOut || result.ExitCode != 0 {
 		return ApplyResult{}, errors.New("Cloudflare Wrangler deployment failed")
 	}
+	writeResult := ApplyResult{ProductionWriteSucceeded: true}
 	after, err := collectDeployments(ctx, executor, confirmed.Plan)
 	if err != nil {
-		return ApplyResult{}, err
+		return writeResult, err
 	}
 	deployment, err := findNewDeployment(before, after)
 	if err != nil {
-		return ApplyResult{}, err
+		return writeResult, err
 	}
-	return ApplyResult{Success: true, DeploymentID: deployment.ID, VersionIDs: deployment.VersionIDs}, nil
+	writeResult.Success = true
+	writeResult.DeploymentID = deployment.ID
+	writeResult.VersionIDs = deployment.VersionIDs
+	return writeResult, nil
 }
 
 type deploymentEvidence struct {

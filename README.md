@@ -3,8 +3,8 @@
 AgentOps is an independent command-line tool for operating application services.
 It validates service inventories, builds release artifacts, checks health,
 deploys releases, creates encrypted database backups, and performs rollbacks.
-Its inventory can also represent observe-only Cloudflare Workers without
-inventing SSH hosts or server paths.
+Its inventory supports both SSH-hosted services and Cloudflare Workers without
+inventing SSH hosts or server paths for Workers.
 
 AgentOps is developed and released independently from AgentSetup. It does not
 read AgentSetup project or registry configuration.
@@ -57,7 +57,8 @@ Source builds report the `source` channel. Release builds report the release
 tag, commit, build date, and `github-release` channel injected by CI.
 
 See [Service operations](docs/service-operations.md) for the configuration and
-command reference. See the
+command reference, including preview-gated Cloudflare deployment and rollback.
+See the
 [dependency adoption roadmap](docs/dependency-adoption-roadmap.md) for the
 approved dependency order and stage gates.
 

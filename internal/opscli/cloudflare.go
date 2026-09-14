@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 	"time"
 
 	"github.com/wenqiangde/agentops/internal/opscloudflare"
@@ -64,9 +65,16 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 			fmt.Fprintln(stderr, "agentops: Cloudflare deployment preview digest is stale")
 			return 1
 		}
+		if err := revalidateCloudflareGitEvidence(ctx, service, gitEvidence); err != nil {
+			fmt.Fprintln(stderr, "agentops: Cloudflare deployment preview digest is stale")
+			return 1
+		}
 		started := time.Now().UTC()
 		result, err := opscloudflare.Apply(ctx, opsCloudflareExecutor(), confirmed)
 		if err != nil || !result.Success {
+			if result.ProductionWriteSucceeded {
+				writeCloudflareApplyFailureReport(reportRoot, "cloudflare-deploy", digest, plan, started, time.Now().UTC(), stdout)
+			}
 			fmt.Fprintln(stdout, "deployment: failed")
 			fmt.Fprintln(stderr, "agentops: Cloudflare deployment apply failed")
 			return 1
@@ -97,6 +105,33 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 		fmt.Fprintln(stdout, "deployment: succeeded")
 	}
 	return 0
+}
+
+func revalidateCloudflareGitEvidence(ctx context.Context, service opsconfig.Service, expected opsgit.Evidence) error {
+	actual, err := opsgit.Inspect(ctx, opsgit.Request{RepositoryRoot: service.Source.RepositoryRoot, Scopes: service.Source.DeploymentScope})
+	if err != nil || !reflect.DeepEqual(actual, expected) {
+		return fmt.Errorf("Cloudflare Git deployment evidence changed")
+	}
+	return nil
+}
+
+func writeCloudflareApplyFailureReport(reportRoot, operationKind, digest string, plan opscloudflare.CloudflareDeployPlan, started, finished time.Time, stdout io.Writer) {
+	operationID, err := newOpsOperationID(operationKind)
+	if err != nil {
+		return
+	}
+	report := opsreport.Report{
+		OperationID: operationID, Actor: plan.AccountID, Service: plan.Service, Environment: plan.Environment, Host: plan.Worker,
+		PlanDigest: digest, RequestedVersion: plan.RequestedVersion, ArtifactDigest: plan.ScopeContentSHA256,
+		Steps:    []opsreport.StepResult{{Order: 1, Kind: "cloudflare-deploy", Status: "failed", StartedAt: started, FinishedAt: finished, Error: "post-deploy identity verification failed"}},
+		Health:   opsreport.HealthEvidence{Type: "http", State: "not-checked", Healthy: false},
+		Recovery: "manual-review-required", Terminal: true, StartedAt: started, FinishedAt: finished,
+		Error: "post-deploy identity verification failed", ManualWork: "inspect Cloudflare deployment state before retrying",
+	}
+	reportPath, err := opsreport.Write(reportRoot, report, nil)
+	if err == nil {
+		fmt.Fprintf(stdout, "report-id: %s\nreport: %s\n", operationID, reportPath)
+	}
 }
 
 func cloudflareOperationReport(operationID, digest string, plan opscloudflare.CloudflareDeployPlan, health opshealth.Result, started, finished time.Time) opsreport.Report {

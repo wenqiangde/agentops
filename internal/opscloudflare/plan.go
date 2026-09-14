@@ -115,7 +115,15 @@ func validatePlanRequest(request PlanRequest) error {
 	if request.Git.RepositoryRoot == "" || request.Preflight.SourcePath == "" {
 		return errors.New("Cloudflare Git evidence is incomplete")
 	}
-	relative, err := filepath.Rel(request.Git.RepositoryRoot, request.Preflight.SourcePath)
+	resolvedRoot, err := filepath.EvalSymlinks(request.Git.RepositoryRoot)
+	if err != nil {
+		return errors.New("Cloudflare Git repository root is unavailable")
+	}
+	resolvedSource, err := filepath.EvalSymlinks(request.Preflight.SourcePath)
+	if err != nil {
+		return errors.New("Cloudflare source path is unavailable")
+	}
+	relative, err := filepath.Rel(resolvedRoot, resolvedSource)
 	if err != nil || relative == ".." || filepath.IsAbs(relative) || len(relative) >= 3 && relative[:3] == ".."+string(filepath.Separator) {
 		return errors.New("Cloudflare source path is outside the Git repository")
 	}

@@ -2,6 +2,7 @@ package opscloudflare_test
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -11,6 +12,24 @@ import (
 	"github.com/wenqiangde/agentops/internal/opsexec"
 	"github.com/wenqiangde/agentops/internal/opsgit"
 )
+
+func TestCreatePlanRejectsSourceSymlinkOutsideRepository(t *testing.T) {
+	repositoryRoot := t.TempDir()
+	externalSource := newCloudflareProject(t)
+	sourcePath := filepath.Join(repositoryRoot, "relay")
+	if err := os.Symlink(externalSource, sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	request := samplePlanRequest(sourcePath)
+	request.Git.RepositoryRoot = repositoryRoot
+	executor := &recordingExecutor{}
+	if _, err := opscloudflare.CreatePlan(context.Background(), executor, request); err == nil {
+		t.Fatal("source symlink outside repository was accepted")
+	}
+	if len(executor.requests) != 0 {
+		t.Fatalf("unsafe source executed commands: %+v", executor.requests)
+	}
+}
 
 func TestCreatePlanOnlyReadsIdentityAndRunsWranglerDryRun(t *testing.T) {
 	sourcePath := newCloudflareProject(t)
@@ -22,7 +41,7 @@ func TestCreatePlanOnlyReadsIdentityAndRunsWranglerDryRun(t *testing.T) {
 	}}
 
 	_, err := opscloudflare.CreatePlan(context.Background(), executor, opscloudflare.PlanRequest{
-		Service:          "preveal-relay",
+		Service:          "example-relay",
 		RequestedVersion: "2026.09.14-1",
 		Git: opsgit.Evidence{
 			RepositoryRoot: sourcePath,
@@ -143,7 +162,7 @@ func TestCloudflareDeployPlanDigestTracksTypedInputs(t *testing.T) {
 
 func samplePlanRequest(sourcePath string) opscloudflare.PlanRequest {
 	return opscloudflare.PlanRequest{
-		Service:          "preveal-relay",
+		Service:          "example-relay",
 		RequestedVersion: "2026.09.14-1",
 		Git: opsgit.Evidence{
 			RepositoryRoot: sourcePath,
