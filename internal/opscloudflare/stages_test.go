@@ -191,11 +191,11 @@ func TestCloudflareSlowExecutorClassifiesEachTimedOutStage(t *testing.T) {
 
 func TestCloudflareStagesReceiveIndependentTimeoutBudgets(t *testing.T) {
 	request := samplePlanRequest(newCloudflareProject(t))
-	request.Preflight.Timeout = 70 * time.Millisecond
+	request.Preflight.Timeout = 200 * time.Millisecond
 	executor := &timedStageExecutor{responses: []timedStageResponse{
-		{delay: 30 * time.Millisecond, result: opsexec.Result{ExitCode: 0, Stdout: "4.35.0\n"}},
-		{delay: 30 * time.Millisecond, result: opsexec.Result{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`}},
-		{delay: 30 * time.Millisecond, result: opsexec.Result{ExitCode: 0}},
+		{delay: 80 * time.Millisecond, result: opsexec.Result{ExitCode: 0, Stdout: "4.35.0\n"}},
+		{delay: 80 * time.Millisecond, result: opsexec.Result{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`}},
+		{delay: 80 * time.Millisecond, result: opsexec.Result{ExitCode: 0}},
 	}}
 	started := time.Now()
 	if _, err := opscloudflare.CreatePlan(context.Background(), executor, request); err != nil {
