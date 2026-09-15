@@ -314,12 +314,16 @@ and digest, before any production Wrangler command. This gate is compiled into
 the CLI and cannot be enabled by service configuration or an environment
 variable. SSH deployment and rollback are unaffected.
 
-Reopening Cloudflare confirmation requires an isolated execution boundary that
-prevents the invoking user and concurrent project processes from changing
-approved inputs, constrains every Wrangler file and command input to that
-boundary, and persists audit evidence through descriptor-relative operations.
-That implementation must pass the elevated-risk independent review before the
-gate is removed.
+The implementation below the closed gate now separates Wrangler preview work
+from production execution. Wrangler remains a pre-confirmation version,
+membership, and dry-run tool only. A production confirmation owns copied module,
+asset, metadata, or rollback-request values and binds the API profile, pinned
+client version, ordered endpoint sequence, and the fixed token-provider identity
+into a separate canonical digest. Token bytes and token hashes never enter that
+material. The production action re-computes the digest immediately before the
+typed Cloudflare API writer; a stale or mutated value stops with no writer call
+and no project path is reopened. This boundary still requires the planned
+adversarial review before the CLI gate can be removed.
 
 The preview copies every declared deployment scope into a private controlled
 snapshot rooted at the repository layout, including ignored build output and
@@ -376,12 +380,20 @@ Repository cleanliness and frozen deployment input are separate concepts:
 - Stale digest, missing target, malformed JSON identity, failed health, or
   report persistence failure: stop and inspect the bounded error/report before
   creating a new preview.
-- If Wrangler reports a successful production write but durable deployment
-  identity verification fails, AgentOps writes a terminal mode-`0600` failure
-  report and requires manual Cloudflare state inspection before any retry. If
-  the primary report root is unavailable, it writes to a private sibling
-  `emergency-reports-<random>` directory created atomically and prints that
-  path. A predictable pre-existing link is never followed.
+- Typed Cloudflare reports distinguish `succeeded`, `known-failure`,
+  `unknown-state`, and `health-failure`. A known failure before a write is
+  terminal for that attempt and may be retried only after correction. Missing
+  durable identity after a possible write, including rollback identity mismatch,
+  is non-terminal `unknown-state` and requires remote inspection before retry.
+  Health failure is recorded separately and requires an explicit rollback
+  decision; it never triggers rollback automatically.
+- Cloudflare reports contain bounded stage evidence and durable deployment or
+  version UUIDs, never token values, raw Wrangler output, `.dev.vars`, source
+  bytes, module bytes, or asset bytes. Files use mode `0600`. If the primary
+  report root is unavailable, the existing fallback writes to a private sibling
+  `emergency-reports-<random>` directory created atomically. A predictable
+  pre-existing link is never followed; failure of both locations leaves the
+  production state unknown and must be surfaced to the operator.
 
 AgentOps does not install dependencies, run Wrangler login, stage/commit/push
 Git changes, create secrets, apply D1 migrations, or infer a rollback target.

@@ -163,6 +163,9 @@ func ParseWranglerConfig(profile string, input []byte) (CanonicalConfig, error) 
 	if raw.DurableObjects != nil {
 		config.DurableObjects = append([]DurableObject(nil), raw.DurableObjects.Bindings...)
 	}
+	if raw.Assets != nil && strings.TrimSpace(raw.Assets.Directory) == "" {
+		return CanonicalConfig{}, errors.New("Cloudflare Wrangler assets source directory is incomplete")
+	}
 	if err := config.validate(); err != nil {
 		return CanonicalConfig{}, err
 	}
@@ -210,7 +213,7 @@ func (c CanonicalConfig) validate() error {
 		}
 		seenFlags[flag] = true
 	}
-	if c.Assets != nil && (c.Assets.Directory == "" || c.Assets.Binding == "" || c.Assets.NotFoundHandling == "") {
+	if c.Assets != nil && (c.Assets.Binding == "" || c.Assets.NotFoundHandling == "") {
 		return errors.New("Cloudflare Wrangler assets are incomplete")
 	}
 	for _, route := range c.Routes {

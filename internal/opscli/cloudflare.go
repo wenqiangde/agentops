@@ -96,7 +96,7 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 			fmt.Fprintln(stderr, cloudflareProductionWritesDisabledMessage)
 			return 1
 		}
-		confirmed, err := opscloudflare.Confirm(plan, previewDigest)
+		_, err := opscloudflare.Confirm(plan, previewDigest)
 		if err != nil {
 			fmt.Fprintln(stderr, "agentops: Cloudflare deployment preview digest is stale")
 			return 1
@@ -112,7 +112,9 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 			return 1
 		}
 		started := time.Now().UTC()
-		result, err := opscloudflare.Apply(applyCtx, opsCloudflareExecutor(), confirmed)
+		// Task 5 binds the confirmed owned payload and token-backed client here.
+		// Until then, the closed production gate and nil writer both fail closed.
+		result, err := opscloudflare.Apply(applyCtx, nil, opscloudflare.ConfirmedProductionPlan{})
 		if err != nil || !result.Success {
 			if result.ProductionWriteSucceeded {
 				if reportErr := writeCloudflareApplyFailureReport(reportRoot, "cloudflare-deploy", digest, plan, started, time.Now().UTC(), stdout); reportErr != nil {

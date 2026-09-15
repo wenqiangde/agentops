@@ -89,6 +89,16 @@ func digestPayload(payload Payload) string {
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
+// CanonicalDigest returns the digest only when it still represents every owned
+// metadata, module, and asset byte in the payload.
+func CanonicalDigest(payload Payload) (string, error) {
+	digest := digestPayload(payload)
+	if payload.SHA256 == "" || payload.SHA256 != digest {
+		return "", errors.New("Cloudflare payload digest is stale")
+	}
+	return digest, nil
+}
+
 func cloneModules(input []Module) []Module {
 	output := make([]Module, len(input))
 	for index, module := range input {

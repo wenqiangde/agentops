@@ -7,76 +7,96 @@ import (
 	"time"
 
 	"github.com/wenqiangde/agentops/internal/opscloudflare"
-	"github.com/wenqiangde/agentops/internal/opsexec"
+	"github.com/wenqiangde/agentops/internal/opscloudflarepayload"
 )
 
-func TestApplyRequiresExactConfirmedDigestAndUsesProjectLocalWrangler(t *testing.T) {
-	plan := opscloudflare.CloudflareDeployPlan{
-		Service: "example-relay", Environment: "production", RequestedVersion: "2026.09.14-1",
-		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
-		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64),
-		WranglerVersion: "4.35.0", BaseCommit: strings.Repeat("2", 40),
-		ScopeState: "clean", ScopeContentSHA256: strings.Repeat("3", 64),
-		DryRunVerified: true, SourcePath: "/tmp/example-relay", Timeout: 5 * time.Second,
-	}
-	digest, err := opscloudflare.Digest(plan)
+func TestApplyUsesOnlyConfirmedOwnedPayload(t *testing.T) {
+	request := deployPayloadRequest(t)
+	plan := deployConfirmedPlan(request.ExpectedSHA256)
+	identity := deployProductionIdentity()
+	digest, err := opscloudflare.ProductionDigest(plan, request, identity)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	staleExecutor := &recordingExecutor{}
-	if _, err := opscloudflare.Apply(context.Background(), staleExecutor, opscloudflare.ConfirmedPlan{Plan: plan, Digest: strings.Repeat("0", 64)}); err == nil {
-		t.Fatal("stale digest was accepted")
+	confirmed, err := opscloudflare.ConfirmProduction(plan, request, identity, digest)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(staleExecutor.requests) != 0 {
-		t.Fatalf("stale digest executed commands: %+v", staleExecutor.requests)
-	}
-
-	executor := &recordingExecutor{results: []opsexec.Result{
-		{ExitCode: 0, Stdout: `[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]`},
-		{ExitCode: 0, Stdout: "private deploy output"},
-		{ExitCode: 0, Stdout: `[{"id":"22222222-2222-4222-8222-222222222222","versions":[{"version_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","percentage":100}]},{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]`},
-	}}
-	result, err := opscloudflare.Apply(context.Background(), executor, opscloudflare.ConfirmedPlan{Plan: plan, Digest: digest})
-	if err != nil || !result.Success || result.DeploymentID != "22222222-2222-4222-8222-222222222222" || len(result.VersionIDs) != 1 || result.VersionIDs[0] != "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" {
+	request.Payload.Modules[0].Bytes[0] ^= 0xff
+	writer := &recordingDeploymentWriter{evidence: opscloudflarepayload.Evidence{ClientVersion: "fake-v1", RequestID: "22222222-2222-4222-8222-222222222222", VersionIDs: []string{"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}, InputSHA256: request.ExpectedSHA256}}
+	result, err := opscloudflare.Apply(context.Background(), writer, confirmed)
+	if err != nil || !result.Success || !result.ProductionWriteSucceeded || result.DeploymentID != writer.evidence.RequestID || len(result.VersionIDs) != 1 {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
-	if len(executor.requests) != 3 {
-		t.Fatalf("requests=%+v", executor.requests)
-	}
-	for _, index := range []int{0, 2} {
-		request := executor.requests[index]
-		if request.Program != "node_modules/.bin/wrangler" || request.Directory != plan.SourcePath || request.Timeout != plan.Timeout || strings.Join(request.Args, " ") != "deployments list --json --config wrangler.jsonc" {
-			t.Fatalf("identity request=%+v", request)
-		}
-	}
-	request := executor.requests[1]
-	if request.Program != "node_modules/.bin/wrangler" || request.Directory != plan.SourcePath || request.Timeout != plan.Timeout || strings.Join(request.Args, " ") != "deploy --config wrangler.jsonc" {
-		t.Fatalf("request=%+v", request)
+	if writer.calls != 1 || writer.request.AccountID != plan.AccountID || writer.request.Worker != plan.Worker || writer.request.ExpectedSHA256 != plan.DeploymentInputSHA256 {
+		t.Fatalf("writer=%+v", writer)
 	}
 }
 
-func TestApplyRejectsSuccessfulDeployWithoutNewDurableIdentity(t *testing.T) {
-	plan := opscloudflare.CloudflareDeployPlan{
-		Service: "example-relay", Environment: "production", RequestedVersion: "2026.09.14-1",
-		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
-		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64),
-		WranglerVersion: "4.35.0", BaseCommit: strings.Repeat("2", 40),
-		ScopeState: "clean", ScopeContentSHA256: strings.Repeat("3", 64),
-		DryRunVerified: true, SourcePath: "/tmp/example-relay", Timeout: 5 * time.Second,
-	}
-	digest, err := opscloudflare.Digest(plan)
+func TestApplyRejectsStaleOrMismatchedPayloadBeforeWriter(t *testing.T) {
+	request := deployPayloadRequest(t)
+	plan := deployConfirmedPlan(request.ExpectedSHA256)
+	identity := deployProductionIdentity()
+	digest, err := opscloudflare.ProductionDigest(plan, request, identity)
 	if err != nil {
 		t.Fatal(err)
 	}
-	unchanged := `[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]`
-	executor := &recordingExecutor{results: []opsexec.Result{
-		{ExitCode: 0, Stdout: unchanged},
-		{ExitCode: 0, Stdout: "deploy exited successfully"},
-		{ExitCode: 0, Stdout: unchanged},
-	}}
-	result, err := opscloudflare.Apply(context.Background(), executor, opscloudflare.ConfirmedPlan{Plan: plan, Digest: digest})
-	if err == nil || result.Success || !strings.Contains(err.Error(), "durable deployment identity") {
-		t.Fatalf("result=%+v err=%v", result, err)
+	tests := []struct {
+		name           string
+		providedDigest string
+		mutate         func(*opscloudflarepayload.Request)
+	}{
+		{name: "stale confirmation", providedDigest: strings.Repeat("0", 64)},
+		{name: "wrong account", providedDigest: digest, mutate: func(r *opscloudflarepayload.Request) { r.AccountID = "other-account" }},
+		{name: "wrong worker", providedDigest: digest, mutate: func(r *opscloudflarepayload.Request) { r.Worker = "other-worker" }},
+		{name: "wrong digest", providedDigest: digest, mutate: func(r *opscloudflarepayload.Request) { r.ExpectedSHA256 = strings.Repeat("0", 64) }},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := request
+			if tt.mutate != nil {
+				tt.mutate(&candidate)
+			}
+			if _, err := opscloudflare.ConfirmProduction(plan, candidate, identity, tt.providedDigest); err == nil {
+				t.Fatal("invalid payload was accepted")
+			}
+		})
+	}
+}
+
+func deployProductionIdentity() opscloudflare.ProductionConfirmationIdentity {
+	return opscloudflare.ProductionConfirmationIdentity{
+		APIProfile: "wrangler-4.107-preveal-v1", ClientVersion: "cloudflare-go/v7.7.0",
+		EndpointSequence: []string{"version-create", "deployment-create", "identity-read"}, TokenProviderIdentity: "environment",
+	}
+}
+
+type recordingDeploymentWriter struct {
+	calls    int
+	request  opscloudflarepayload.Request
+	evidence opscloudflarepayload.Evidence
+}
+
+func (w *recordingDeploymentWriter) Deploy(_ context.Context, request opscloudflarepayload.Request) (opscloudflarepayload.Evidence, error) {
+	w.calls++
+	w.request = request
+	return w.evidence, nil
+}
+
+func deployPayloadRequest(t *testing.T) opscloudflarepayload.Request {
+	t.Helper()
+	metadata := []byte(`{"profile":"wrangler-4.107-preveal-v1","name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","main":"worker.mjs","compatibility_date":"2026-09-15","workers_dev":false,"preview_urls":false}`)
+	payload, err := opscloudflarepayload.NewPayload("worker.mjs", []opscloudflarepayload.Module{{Name: "worker.mjs", Type: "application/javascript+module", Bytes: []byte("approved module")}}, nil, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := opscloudflarepayload.NewRequest("0123456789abcdef0123456789abcdef", "example-worker", payload.SHA256, payload, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
+}
+
+func deployConfirmedPlan(payloadDigest string) opscloudflare.CloudflareDeployPlan {
+	return opscloudflare.CloudflareDeployPlan{Service: "example-relay", Environment: "production", RequestedVersion: "2026.09.14-1", Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef", WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.35.0", BaseCommit: strings.Repeat("2", 40), ScopeState: "clean", ScopeContentSHA256: strings.Repeat("3", 64), DeploymentInputSHA256: payloadDigest, DryRunVerified: true, SourcePath: "/tmp/example-relay", Timeout: 5 * time.Second}
 }

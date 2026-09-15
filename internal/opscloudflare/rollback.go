@@ -11,6 +11,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/wenqiangde/agentops/internal/opscloudflarepayload"
 	"github.com/wenqiangde/agentops/internal/opsexec"
 	"github.com/wenqiangde/agentops/internal/opsgit"
 )
@@ -68,6 +69,13 @@ type CloudflareRollbackPlan struct {
 type ConfirmedRollbackPlan struct {
 	Plan   CloudflareRollbackPlan
 	Digest string
+}
+
+type ConfirmedProductionRollbackPlan struct {
+	plan     CloudflareRollbackPlan
+	request  opscloudflarepayload.RollbackRequest
+	identity ProductionConfirmationIdentity
+	digest   string
 }
 
 type RollbackResult struct {
@@ -200,31 +208,42 @@ func ConfirmRollbackPlan(plan CloudflareRollbackPlan, providedDigest string) (Co
 	return ConfirmedRollbackPlan{Plan: plan, Digest: digest}, nil
 }
 
-func ApplyRollback(ctx context.Context, executor opsexec.Executor, confirmed ConfirmedRollbackPlan) (RollbackResult, error) {
-	if ctx == nil || executor == nil {
+type RollbackWriter interface {
+	Rollback(context.Context, opscloudflarepayload.RollbackRequest) (opscloudflarepayload.Evidence, error)
+}
+
+func ConfirmProductionRollback(plan CloudflareRollbackPlan, request opscloudflarepayload.RollbackRequest, identity ProductionConfirmationIdentity, providedDigest string) (ConfirmedProductionRollbackPlan, error) {
+	if plan.Blocked || !plan.TargetVerified {
+		return ConfirmedProductionRollbackPlan{}, errors.New("Cloudflare production rollback cannot be confirmed")
+	}
+	digest, err := RollbackProductionDigest(plan, request, identity)
+	if err != nil || providedDigest == "" || providedDigest != digest {
+		return ConfirmedProductionRollbackPlan{}, errors.New("Cloudflare production rollback confirmation is stale")
+	}
+	owned, err := opscloudflarepayload.OwnRollbackRequest(request)
+	if err != nil {
+		return ConfirmedProductionRollbackPlan{}, errors.New("Cloudflare production rollback request is invalid")
+	}
+	identity.EndpointSequence = append([]string(nil), identity.EndpointSequence...)
+	return ConfirmedProductionRollbackPlan{plan: plan, request: owned, identity: identity, digest: digest}, nil
+}
+
+func ApplyRollback(ctx context.Context, writer RollbackWriter, confirmed ConfirmedProductionRollbackPlan) (RollbackResult, error) {
+	if ctx == nil || writer == nil {
 		return RollbackResult{}, errors.New("Cloudflare rollback apply inputs are incomplete")
 	}
-	validated, err := ConfirmRollbackPlan(confirmed.Plan, confirmed.Digest)
-	if err != nil || validated.Digest != confirmed.Digest || confirmed.Plan.SourcePath == "" || confirmed.Plan.Timeout <= 0 {
+	digest, err := RollbackProductionDigest(confirmed.plan, confirmed.request, confirmed.identity)
+	if err != nil || digest != confirmed.digest {
 		return RollbackResult{}, errors.New("Cloudflare rollback confirmation is invalid")
 	}
-	result := executor.Run(ctx, opsexec.Request{
-		Program:   "node_modules/.bin/wrangler",
-		Args:      []string{"rollback", confirmed.Plan.TargetVersionID, "--message", rollbackMessage, "--config", confirmed.Plan.WranglerConfig},
-		Directory: confirmed.Plan.SourcePath, Timeout: confirmed.Plan.Timeout,
-	})
-	if result.Err != nil || result.TimedOut || result.ExitCode != 0 {
-		return RollbackResult{}, errors.New("Cloudflare Wrangler rollback failed")
+	evidence, err := writer.Rollback(ctx, confirmed.request)
+	if err != nil {
+		return RollbackResult{}, errors.New("Cloudflare trusted rollback failed")
 	}
-	writeResult := RollbackResult{ProductionWriteSucceeded: true}
-	current, err := readCurrentDeployment(ctx, executor, confirmed.Plan.SourcePath, confirmed.Plan.WranglerConfig, confirmed.Plan.Timeout)
-	if err != nil || len(current.Versions) != 1 || current.Versions[0].VersionID != confirmed.Plan.TargetVersionID || current.Versions[0].Percentage != 100 || current.ID == confirmed.Plan.CurrentDeploymentID {
-		return writeResult, errors.New("Cloudflare rollback active deployment verification failed")
+	if !cloudflareUUIDPattern.MatchString(evidence.RequestID) || evidence.RequestID == confirmed.plan.CurrentDeploymentID || evidence.InputSHA256 != confirmed.request.ExpectedSHA256 || len(evidence.VersionIDs) != 1 || evidence.VersionIDs[0] != confirmed.plan.TargetVersionID {
+		return RollbackResult{ProductionWriteSucceeded: true}, errors.New("Cloudflare rollback active deployment verification failed")
 	}
-	writeResult.Success = true
-	writeResult.DeploymentID = current.ID
-	writeResult.VersionID = current.Versions[0].VersionID
-	return writeResult, nil
+	return RollbackResult{Success: true, ProductionWriteSucceeded: true, DeploymentID: evidence.RequestID, VersionID: evidence.VersionIDs[0]}, nil
 }
 
 type deploymentRecord struct {

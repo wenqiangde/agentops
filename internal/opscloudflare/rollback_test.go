@@ -94,10 +94,11 @@ func TestConfirmRollbackPlanRejectsTargetSourceAndAccountDrift(t *testing.T) {
 		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
 		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.35.0",
 		BaseCommit: strings.Repeat("2", 40), ScopeState: opsgit.StateClean, ScopeContentSHA256: strings.Repeat("3", 64),
-		TargetVersionID:     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-		CurrentDeploymentID: "11111111-1111-4111-8111-111111111111",
-		CurrentVersionIDs:   []string{"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"},
-		TargetVerified:      true,
+		DeploymentInputSHA256: strings.Repeat("4", 64),
+		TargetVersionID:       "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		CurrentDeploymentID:   "11111111-1111-4111-8111-111111111111",
+		CurrentVersionIDs:     []string{"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"},
+		TargetVerified:        true,
 	}
 	digest, err := opscloudflare.RollbackDigest(base)
 	if err != nil {
@@ -125,41 +126,6 @@ func TestConfirmRollbackPlanRejectsTargetSourceAndAccountDrift(t *testing.T) {
 				t.Fatalf("drift accepted: plan=%+v err=%v", changed, err)
 			}
 		})
-	}
-}
-
-func TestApplyRollbackUsesExplicitVersionAndVerifiesActiveDeployment(t *testing.T) {
-	plan := sampleCloudflareRollbackPlan()
-	digest, err := opscloudflare.RollbackDigest(plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	confirmed, err := opscloudflare.ConfirmRollbackPlan(plan, digest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	executor := &recordingExecutor{results: []opsexec.Result{
-		{ExitCode: 0, Stdout: "private rollback output"},
-		{ExitCode: 0, Stdout: `{"id":"22222222-2222-4222-8222-222222222222","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`},
-	}}
-	result, err := opscloudflare.ApplyRollback(context.Background(), executor, confirmed)
-	if err != nil || !result.Success || result.DeploymentID != "22222222-2222-4222-8222-222222222222" || result.VersionID != plan.TargetVersionID {
-		t.Fatalf("result=%+v err=%v", result, err)
-	}
-	want := []opsexec.Request{
-		{
-			Program:   "node_modules/.bin/wrangler",
-			Args:      []string{"rollback", plan.TargetVersionID, "--message", "AgentOps confirmed rollback", "--config", "wrangler.jsonc"},
-			Directory: "/tmp/example-relay", Timeout: 5 * time.Second,
-		},
-		{
-			Program:   "node_modules/.bin/wrangler",
-			Args:      []string{"deployments", "status", "--json", "--config", "wrangler.jsonc"},
-			Directory: "/tmp/example-relay", Timeout: 5 * time.Second,
-		},
-	}
-	if !reflect.DeepEqual(executor.requests, want) {
-		t.Fatalf("requests=%+v want=%+v", executor.requests, want)
 	}
 }
 
@@ -242,47 +208,6 @@ func TestCreateRollbackPlanRejectsUnprovableCurrentIdentityAndBlocksAlreadyActiv
 	}
 }
 
-func TestApplyRollbackRejectsUnverifiedActiveDeployment(t *testing.T) {
-	plan := sampleCloudflareRollbackPlan()
-	digest, err := opscloudflare.RollbackDigest(plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	confirmed, err := opscloudflare.ConfirmRollbackPlan(plan, digest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tests := []struct {
-		name   string
-		status string
-	}{
-		{
-			name:   "deployment unchanged",
-			status: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`,
-		},
-		{
-			name:   "wrong version",
-			status: `{"id":"22222222-2222-4222-8222-222222222222","versions":[{"version_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","percentage":100}]}`,
-		},
-		{
-			name:   "partial traffic",
-			status: `{"id":"22222222-2222-4222-8222-222222222222","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":50},{"version_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","percentage":50}]}`,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			executor := &recordingExecutor{results: []opsexec.Result{
-				{ExitCode: 0, Stdout: "private rollback output"},
-				{ExitCode: 0, Stdout: tt.status},
-			}}
-			result, err := opscloudflare.ApplyRollback(context.Background(), executor, confirmed)
-			if err == nil || result.Success || !strings.Contains(err.Error(), "active deployment verification") {
-				t.Fatalf("result=%+v err=%v", result, err)
-			}
-		})
-	}
-}
-
 func rollbackTargetRequest(target string) opscloudflare.RollbackTargetRequest {
 	return opscloudflare.RollbackTargetRequest{
 		SourcePath: "/tmp/example-relay", WranglerConfig: "wrangler.jsonc", TargetID: target, Timeout: 5 * time.Second,
@@ -309,10 +234,11 @@ func sampleCloudflareRollbackPlan() opscloudflare.CloudflareRollbackPlan {
 		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
 		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.35.0",
 		BaseCommit: strings.Repeat("2", 40), ScopeState: opsgit.StateClean, ScopeContentSHA256: strings.Repeat("3", 64),
-		TargetVersionID:     "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-		CurrentDeploymentID: "11111111-1111-4111-8111-111111111111",
-		CurrentVersionIDs:   []string{"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"},
-		TargetVerified:      true, SourcePath: "/tmp/example-relay", Timeout: 5 * time.Second,
+		DeploymentInputSHA256: strings.Repeat("4", 64),
+		TargetVersionID:       "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		CurrentDeploymentID:   "11111111-1111-4111-8111-111111111111",
+		CurrentVersionIDs:     []string{"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"},
+		TargetVerified:        true, SourcePath: "/tmp/example-relay", Timeout: 5 * time.Second,
 	}
 }
 

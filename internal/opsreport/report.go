@@ -21,23 +21,24 @@ var spacedCredential = regexp.MustCompile(`(?i)(?:--)?(?:password|passwd|token|s
 var URLUserInfo = regexp.MustCompile(`(?i)(https?://)[^/@\s]+:[^/@\s]+@`)
 
 type Report struct {
-	OperationID      string         `json:"operation_id"`
-	Actor            string         `json:"actor"`
-	Service          string         `json:"service"`
-	Environment      string         `json:"environment"`
-	Host             string         `json:"host"`
-	PlanDigest       string         `json:"plan_digest"`
-	PreviousVersion  string         `json:"previous_version,omitempty"`
-	RequestedVersion string         `json:"requested_version"`
-	ArtifactDigest   string         `json:"artifact_digest"`
-	Steps            []StepResult   `json:"steps"`
-	Health           HealthEvidence `json:"health"`
-	Recovery         string         `json:"recovery"`
-	Terminal         bool           `json:"terminal"`
-	StartedAt        time.Time      `json:"started_at"`
-	FinishedAt       time.Time      `json:"finished_at"`
-	Error            string         `json:"error,omitempty"`
-	ManualWork       string         `json:"manual_work,omitempty"`
+	OperationID      string              `json:"operation_id"`
+	Actor            string              `json:"actor"`
+	Service          string              `json:"service"`
+	Environment      string              `json:"environment"`
+	Host             string              `json:"host"`
+	PlanDigest       string              `json:"plan_digest"`
+	PreviousVersion  string              `json:"previous_version,omitempty"`
+	RequestedVersion string              `json:"requested_version"`
+	ArtifactDigest   string              `json:"artifact_digest"`
+	Steps            []StepResult        `json:"steps"`
+	Health           HealthEvidence      `json:"health"`
+	Recovery         string              `json:"recovery"`
+	Terminal         bool                `json:"terminal"`
+	StartedAt        time.Time           `json:"started_at"`
+	FinishedAt       time.Time           `json:"finished_at"`
+	Error            string              `json:"error,omitempty"`
+	ManualWork       string              `json:"manual_work,omitempty"`
+	Cloudflare       *CloudflareEvidence `json:"cloudflare,omitempty"`
 }
 
 type StepResult struct {
@@ -108,6 +109,11 @@ func validate(report Report) error {
 		}
 		if step.StartedAt.IsZero() || step.FinishedAt.IsZero() || step.FinishedAt.Before(step.StartedAt) || step.StartedAt.Before(report.StartedAt) || step.FinishedAt.After(report.FinishedAt) {
 			return errors.New("report step time range is invalid")
+		}
+	}
+	if report.Cloudflare != nil {
+		if err := validateCloudflareEvidence(*report.Cloudflare); err != nil {
+			return err
 		}
 	}
 	return nil

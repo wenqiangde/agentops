@@ -2,17 +2,22 @@ package opscloudflare
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"regexp"
-	"sort"
 
-	"github.com/wenqiangde/agentops/internal/opsexec"
+	"github.com/wenqiangde/agentops/internal/opscloudflarepayload"
 )
 
 type ConfirmedPlan struct {
 	Plan   CloudflareDeployPlan
 	Digest string
+}
+
+type ConfirmedProductionPlan struct {
+	plan     CloudflareDeployPlan
+	request  opscloudflarepayload.Request
+	identity ProductionConfirmationIdentity
+	digest   string
 }
 
 type ApplyResult struct {
@@ -38,106 +43,43 @@ func Confirm(plan CloudflareDeployPlan, providedDigest string) (ConfirmedPlan, e
 	return ConfirmedPlan{Plan: plan, Digest: digest}, nil
 }
 
-func Apply(ctx context.Context, executor opsexec.Executor, confirmed ConfirmedPlan) (ApplyResult, error) {
-	if ctx == nil || executor == nil {
+type DeploymentWriter interface {
+	Deploy(context.Context, opscloudflarepayload.Request) (opscloudflarepayload.Evidence, error)
+}
+
+func ConfirmProduction(plan CloudflareDeployPlan, request opscloudflarepayload.Request, identity ProductionConfirmationIdentity, providedDigest string) (ConfirmedProductionPlan, error) {
+	if plan.Blocked || !plan.DryRunVerified {
+		return ConfirmedProductionPlan{}, errors.New("Cloudflare production plan cannot be confirmed")
+	}
+	digest, err := ProductionDigest(plan, request, identity)
+	if err != nil || providedDigest == "" || providedDigest != digest {
+		return ConfirmedProductionPlan{}, errors.New("Cloudflare production confirmation is stale")
+	}
+	owned, err := opscloudflarepayload.OwnRequest(request)
+	if err != nil {
+		return ConfirmedProductionPlan{}, errors.New("Cloudflare production request is invalid")
+	}
+	identity.EndpointSequence = append([]string(nil), identity.EndpointSequence...)
+	return ConfirmedProductionPlan{plan: plan, request: owned, identity: identity, digest: digest}, nil
+}
+
+func Apply(ctx context.Context, writer DeploymentWriter, confirmed ConfirmedProductionPlan) (ApplyResult, error) {
+	if ctx == nil || writer == nil {
 		return ApplyResult{}, errors.New("Cloudflare deployment apply inputs are incomplete")
 	}
 	if err := ctx.Err(); err != nil {
 		return ApplyResult{}, err
 	}
-	validated, err := Confirm(confirmed.Plan, confirmed.Digest)
-	if err != nil || validated.Digest != confirmed.Digest || confirmed.Plan.SourcePath == "" || confirmed.Plan.Timeout <= 0 {
+	digest, err := ProductionDigest(confirmed.plan, confirmed.request, confirmed.identity)
+	if err != nil || digest != confirmed.digest {
 		return ApplyResult{}, errors.New("Cloudflare deployment confirmation is invalid")
 	}
-	before, err := collectDeployments(ctx, executor, confirmed.Plan)
+	evidence, err := writer.Deploy(ctx, confirmed.request)
 	if err != nil {
-		return ApplyResult{}, err
+		return ApplyResult{}, errors.New("Cloudflare trusted deployment failed")
 	}
-	result := executor.Run(ctx, opsexec.Request{
-		Program:   "node_modules/.bin/wrangler",
-		Args:      []string{"deploy", "--config", confirmed.Plan.WranglerConfig},
-		Directory: confirmed.Plan.SourcePath, Timeout: confirmed.Plan.Timeout,
-	})
-	if result.Err != nil || result.TimedOut || result.ExitCode != 0 {
-		return ApplyResult{}, errors.New("Cloudflare Wrangler deployment failed")
+	if !cloudflareUUIDPattern.MatchString(evidence.RequestID) || evidence.InputSHA256 != confirmed.request.ExpectedSHA256 || len(evidence.VersionIDs) != 1 || !cloudflareUUIDPattern.MatchString(evidence.VersionIDs[0]) {
+		return ApplyResult{ProductionWriteSucceeded: true}, errors.New("Cloudflare durable deployment identity is missing")
 	}
-	writeResult := ApplyResult{ProductionWriteSucceeded: true}
-	after, err := collectDeployments(ctx, executor, confirmed.Plan)
-	if err != nil {
-		return writeResult, err
-	}
-	deployment, err := findNewDeployment(before, after)
-	if err != nil {
-		return writeResult, err
-	}
-	writeResult.Success = true
-	writeResult.DeploymentID = deployment.ID
-	writeResult.VersionIDs = deployment.VersionIDs
-	return writeResult, nil
-}
-
-type deploymentEvidence struct {
-	ID         string
-	VersionIDs []string
-}
-
-func collectDeployments(ctx context.Context, executor opsexec.Executor, plan CloudflareDeployPlan) ([]deploymentEvidence, error) {
-	result := executor.Run(ctx, opsexec.Request{
-		Program:   "node_modules/.bin/wrangler",
-		Args:      []string{"deployments", "list", "--json", "--config", plan.WranglerConfig},
-		Directory: plan.SourcePath, Timeout: plan.Timeout,
-	})
-	if result.Err != nil || result.TimedOut || result.ExitCode != 0 {
-		return nil, errors.New("Cloudflare deployment identity lookup failed")
-	}
-	var payload []struct {
-		ID       string `json:"id"`
-		Versions []struct {
-			VersionID string `json:"version_id"`
-			ID        string `json:"id"`
-		} `json:"versions"`
-	}
-	if json.Unmarshal([]byte(result.Stdout), &payload) != nil {
-		return nil, errors.New("Cloudflare deployment identity response is malformed")
-	}
-	deployments := make([]deploymentEvidence, 0, len(payload))
-	for _, item := range payload {
-		if !cloudflareUUIDPattern.MatchString(item.ID) {
-			return nil, errors.New("Cloudflare durable deployment identity is missing")
-		}
-		versions := make([]string, 0, len(item.Versions))
-		for _, version := range item.Versions {
-			id := version.VersionID
-			if id == "" {
-				id = version.ID
-			}
-			if !cloudflareUUIDPattern.MatchString(id) {
-				return nil, errors.New("Cloudflare durable deployment identity is missing")
-			}
-			versions = append(versions, id)
-		}
-		if len(versions) == 0 {
-			return nil, errors.New("Cloudflare durable deployment identity is missing")
-		}
-		sort.Strings(versions)
-		deployments = append(deployments, deploymentEvidence{ID: item.ID, VersionIDs: versions})
-	}
-	return deployments, nil
-}
-
-func findNewDeployment(before, after []deploymentEvidence) (deploymentEvidence, error) {
-	known := make(map[string]struct{}, len(before))
-	for _, deployment := range before {
-		known[deployment.ID] = struct{}{}
-	}
-	var added []deploymentEvidence
-	for _, deployment := range after {
-		if _, exists := known[deployment.ID]; !exists {
-			added = append(added, deployment)
-		}
-	}
-	if len(added) != 1 {
-		return deploymentEvidence{}, errors.New("Cloudflare durable deployment identity is missing or ambiguous")
-	}
-	return added[0], nil
+	return ApplyResult{Success: true, ProductionWriteSucceeded: true, DeploymentID: evidence.RequestID, VersionIDs: append([]string(nil), evidence.VersionIDs...)}, nil
 }

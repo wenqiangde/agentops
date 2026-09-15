@@ -187,7 +187,7 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		fmt.Fprintln(stderr, cloudflareProductionWritesDisabledMessage)
 		return 1
 	}
-	confirmed, err := opscloudflare.ConfirmRollbackPlan(plan, previewDigest)
+	_, err = opscloudflare.ConfirmRollbackPlan(plan, previewDigest)
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest is stale")
 		return 1
@@ -203,7 +203,9 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		return 1
 	}
 	started := time.Now().UTC()
-	result, err := opscloudflare.ApplyRollback(applyCtx, opsCloudflareExecutor(), confirmed)
+	// Task 5 binds the confirmed rollback request and token-backed client here.
+	// Until then, the closed production gate and nil writer both fail closed.
+	result, err := opscloudflare.ApplyRollback(applyCtx, nil, opscloudflare.ConfirmedProductionRollbackPlan{})
 	if err != nil || !result.Success {
 		if result.ProductionWriteSucceeded {
 			if reportErr := writeCloudflareRollbackFailureReport(reportRoot, digest, plan, started, time.Now().UTC(), stdout); reportErr != nil {
