@@ -4,6 +4,7 @@ go 1.22
 
 require (
 	github.com/spf13/cobra v1.10.2
+	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	golang.org/x/sys v0.22.0
 	gopkg.in/yaml.v3 v3.0.1
 )

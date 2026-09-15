@@ -15,11 +15,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-type Payload struct {
-	files  map[string][]byte
-	sha256 string
-}
-
 type Transport interface {
 	Send(context.Context, Payload) error
 }
@@ -32,23 +27,27 @@ func (p Payload) File(name string) ([]byte, bool) {
 	return append([]byte(nil), content...), true
 }
 
-func (p Payload) SHA256() string {
-	return p.sha256
-}
-
 func Deliver(ctx context.Context, payload Payload, transport Transport) error {
-	if ctx == nil || transport == nil || len(payload.files) == 0 || payload.sha256 == "" {
+	if ctx == nil || transport == nil || len(payload.files) == 0 || payload.SHA256 == "" {
 		return errors.New("Cloudflare frozen payload delivery is invalid")
 	}
 	return transport.Send(ctx, payload.clone())
 }
 
 func (p Payload) clone() Payload {
+	cloned := Payload{
+		MainModule: p.MainModule,
+		Modules:    cloneModules(p.Modules),
+		Assets:     cloneAssets(p.Assets),
+		Metadata:   append([]byte(nil), p.Metadata...),
+		SHA256:     p.SHA256,
+	}
 	files := make(map[string][]byte, len(p.files))
 	for name, content := range p.files {
 		files[name] = append([]byte(nil), content...)
 	}
-	return Payload{files: files, sha256: p.sha256}
+	cloned.files = files
+	return cloned
 }
 
 func Capture(root string, paths []string) (Payload, error) {
@@ -83,7 +82,7 @@ func Capture(root string, paths []string) (Payload, error) {
 		_, _ = digest.Write(content)
 		_, _ = digest.Write([]byte{0})
 	}
-	return Payload{files: files, sha256: hex.EncodeToString(digest.Sum(nil))}, nil
+	return Payload{files: files, SHA256: hex.EncodeToString(digest.Sum(nil))}, nil
 }
 
 func readRelativeFile(rootFD int, relative string) ([]byte, error) {

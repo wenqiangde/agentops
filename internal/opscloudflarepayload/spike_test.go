@@ -111,8 +111,8 @@ func TestIsolationSpikeDigestRepresentsCapturedBytes(t *testing.T) {
 	hash.Write([]byte("worker.mjs\x008\x00"))
 	hash.Write(content)
 	hash.Write([]byte{0})
-	if payload.SHA256() != hex.EncodeToString(hash.Sum(nil)) {
-		t.Fatalf("digest does not represent captured bytes: %s", payload.SHA256())
+	if payload.SHA256 != hex.EncodeToString(hash.Sum(nil)) {
+		t.Fatalf("digest does not represent captured bytes: %s", payload.SHA256)
 	}
 }
 
@@ -129,7 +129,7 @@ func TestIsolationSpikeTransportReceivesOwnedPayloadWithoutPaths(t *testing.T) {
 	}
 	writeSpikeFile(t, filepath.Join(root, "worker.mjs"), "mutated")
 	assertFrozenFile(t, transport.payload, "worker.mjs", "approved")
-	if transport.payload.SHA256() != payload.SHA256() {
+	if transport.payload.SHA256 != payload.SHA256 {
 		t.Fatal("transport payload digest changed")
 	}
 }
