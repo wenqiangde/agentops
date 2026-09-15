@@ -18,12 +18,13 @@ type Request struct {
 }
 
 type Evidence struct {
-	ClientVersion string
-	RequestID     string
-	VersionIDs    []string
-	InputSHA256   string
-	StartedAt     time.Time
-	FinishedAt    time.Time
+	ClientVersion       string
+	RequestID           string
+	VersionIDs          []string
+	InputSHA256         string
+	RemoteWritePossible bool
+	StartedAt           time.Time
+	FinishedAt          time.Time
 }
 
 type TrustedTransport interface {
@@ -92,9 +93,9 @@ func (c *Client) Deploy(ctx context.Context, request Request) (Evidence, error) 
 	evidence, err := c.transport.Deploy(requestContext, token, request)
 	if err != nil {
 		if requestContext.Err() != nil {
-			return Evidence{}, requestContext.Err()
+			return evidence, requestContext.Err()
 		}
-		return Evidence{}, errors.New("Cloudflare production deploy failed")
+		return evidence, errors.New("Cloudflare production deploy failed")
 	}
 	if evidence.InputSHA256 != request.ExpectedSHA256 {
 		return Evidence{}, errors.New("Cloudflare production evidence is invalid")
@@ -127,9 +128,9 @@ func (c *Client) Rollback(ctx context.Context, request RollbackRequest) (Evidenc
 	evidence, err := transport.Rollback(requestContext, token, request)
 	if err != nil {
 		if requestContext.Err() != nil {
-			return Evidence{}, requestContext.Err()
+			return evidence, requestContext.Err()
 		}
-		return Evidence{}, errors.New("Cloudflare production rollback failed")
+		return evidence, errors.New("Cloudflare production rollback failed")
 	}
 	if evidence.InputSHA256 != request.ExpectedSHA256 {
 		return Evidence{}, errors.New("Cloudflare production evidence is invalid")

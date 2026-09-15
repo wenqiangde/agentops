@@ -44,7 +44,7 @@ func TestProductionDigestBindsTrustedExecutionIdentityAndCompleteOwnedPayload(t 
 			request.ExpectedSHA256 = request.Payload.SHA256
 			plan.DeploymentInputSHA256 = request.Payload.SHA256
 		}},
-		{name: "endpoint sequence", mutate: func(_ *opscloudflare.CloudflareDeployPlan, _ *opscloudflarepayload.Request, identity *opscloudflare.ProductionConfirmationIdentity) {
+		{name: "endpoint sequence", reject: true, mutate: func(_ *opscloudflare.CloudflareDeployPlan, _ *opscloudflarepayload.Request, identity *opscloudflare.ProductionConfirmationIdentity) {
 			identity.EndpointSequence[0], identity.EndpointSequence[1] = identity.EndpointSequence[1], identity.EndpointSequence[0]
 		}},
 		{name: "token provider identity", mutate: func(_ *opscloudflare.CloudflareDeployPlan, _ *opscloudflarepayload.Request, identity *opscloudflare.ProductionConfirmationIdentity) {
@@ -168,10 +168,19 @@ func productionDigestFixture(t *testing.T) (opscloudflare.CloudflareDeployPlan, 
 	identity := opscloudflare.ProductionConfirmationIdentity{
 		APIProfile:            "wrangler-4.107-preveal-v1",
 		ClientVersion:         "cloudflare-go/v7.7.0",
-		EndpointSequence:      []string{"read-current", "asset-session", "asset-upload", "version-create", "deployment-create", "identity-read"},
+		EndpointSequence:      mustEndpointSequence(t, request),
 		TokenProviderIdentity: "environment",
 	}
 	return plan, request, identity
+}
+
+func mustEndpointSequence(t *testing.T, request opscloudflarepayload.Request) []string {
+	t.Helper()
+	sequence, err := opscloudflarepayload.EndpointSequence(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sequence
 }
 
 func mustProductionPayload(t *testing.T, compatibilityDate, module, asset string) opscloudflarepayload.Payload {

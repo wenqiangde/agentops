@@ -2,6 +2,7 @@ package opscloudflare_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +76,38 @@ func TestApplyRollbackRejectsDriftBeforeWriter(t *testing.T) {
 	}
 }
 
+func TestApplyRollbackPreservesUnknownRemoteStateFromWriterError(t *testing.T) {
+	plan := sampleCloudflareRollbackPlan()
+	request, err := opscloudflarepayload.NewRollbackRequest(plan.AccountID, plan.Worker, plan.TargetVersionID, plan.CurrentDeploymentID, plan.DeploymentInputSHA256, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := rollbackProductionIdentity()
+	digest, err := opscloudflare.RollbackProductionDigest(plan, request, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := opscloudflare.ConfirmProductionRollback(plan, request, identity, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordingRollbackWriter{
+		evidence: opscloudflarepayload.Evidence{
+			RemoteWritePossible: true,
+			RequestID:           "22222222-2222-4222-8222-222222222222",
+			VersionIDs:          []string{plan.TargetVersionID},
+		},
+		err: errors.New("identity read failed"),
+	}
+	result, err := opscloudflare.ApplyRollback(context.Background(), writer, confirmed)
+	if err == nil {
+		t.Fatal("unknown rollback state was reported as success")
+	}
+	if !result.ProductionWriteSucceeded || result.DeploymentID != writer.evidence.RequestID || result.VersionID != plan.TargetVersionID {
+		t.Fatalf("unknown rollback state evidence was lost: %#v", result)
+	}
+}
+
 func rollbackProductionIdentity() opscloudflare.ProductionConfirmationIdentity {
 	return opscloudflare.ProductionConfirmationIdentity{
 		APIProfile: "wrangler-4.107-preveal-v1", ClientVersion: "cloudflare-go/v7.7.0",
@@ -86,10 +119,11 @@ type recordingRollbackWriter struct {
 	calls    int
 	request  opscloudflarepayload.RollbackRequest
 	evidence opscloudflarepayload.Evidence
+	err      error
 }
 
 func (w *recordingRollbackWriter) Rollback(_ context.Context, request opscloudflarepayload.RollbackRequest) (opscloudflarepayload.Evidence, error) {
 	w.calls++
 	w.request = request
-	return w.evidence, nil
+	return w.evidence, w.err
 }

@@ -200,6 +200,28 @@ func TestProductionClientRetainedDescriptorCannotChangePreparedPayload(t *testin
 	}
 }
 
+func TestProductionClientPreservesUnknownRemoteStateEvidence(t *testing.T) {
+	request := productionClientRequest(t, time.Second)
+	want := opscloudflarepayload.Evidence{
+		RemoteWritePossible: true,
+		RequestID:           "22222222-2222-4222-8222-222222222222",
+		VersionIDs:          []string{"11111111-1111-4111-8111-111111111111"},
+		InputSHA256:         request.ExpectedSHA256,
+	}
+	transport := &recordingProductionTransport{evidence: want, err: errors.New("identity read failed")}
+	client, err := opscloudflarepayload.NewClient(&productionTokenProvider{token: []byte("token")}, transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := client.Deploy(context.Background(), request)
+	if err == nil {
+		t.Fatal("transport failure was reported as success")
+	}
+	if !got.RemoteWritePossible || got.RequestID != want.RequestID || !reflect.DeepEqual(got.VersionIDs, want.VersionIDs) {
+		t.Fatalf("unknown-state evidence was lost: %#v", got)
+	}
+}
+
 type productionTokenProvider struct {
 	token []byte
 	calls int
@@ -213,9 +235,11 @@ func (p *productionTokenProvider) Token(context.Context) ([]byte, error) {
 func (p *productionTokenProvider) Identity() string { return "environment" }
 
 type recordingProductionTransport struct {
-	calls   int
-	token   []byte
-	request opscloudflarepayload.Request
+	calls    int
+	token    []byte
+	request  opscloudflarepayload.Request
+	evidence opscloudflarepayload.Evidence
+	err      error
 }
 
 func (r *recordingProductionTransport) Deploy(_ context.Context, token []byte, request opscloudflarepayload.Request) (opscloudflarepayload.Evidence, error) {
@@ -223,6 +247,9 @@ func (r *recordingProductionTransport) Deploy(_ context.Context, token []byte, r
 	r.token = append([]byte(nil), token...)
 	r.request = request
 	now := time.Now()
+	if r.evidence.RemoteWritePossible || r.err != nil {
+		return r.evidence, r.err
+	}
 	return opscloudflarepayload.Evidence{
 		ClientVersion: "fake-v1", RequestID: "request-1", InputSHA256: request.ExpectedSHA256,
 		StartedAt: now, FinishedAt: now,

@@ -238,7 +238,15 @@ func ApplyRollback(ctx context.Context, writer RollbackWriter, confirmed Confirm
 	}
 	evidence, err := writer.Rollback(ctx, confirmed.request)
 	if err != nil {
-		return RollbackResult{}, errors.New("Cloudflare trusted rollback failed")
+		result := RollbackResult{}
+		if evidence.RemoteWritePossible {
+			result.ProductionWriteSucceeded = true
+			result.DeploymentID = evidence.RequestID
+			if len(evidence.VersionIDs) == 1 {
+				result.VersionID = evidence.VersionIDs[0]
+			}
+		}
+		return result, errors.New("Cloudflare trusted rollback failed")
 	}
 	if !cloudflareUUIDPattern.MatchString(evidence.RequestID) || evidence.RequestID == confirmed.plan.CurrentDeploymentID || evidence.InputSHA256 != confirmed.request.ExpectedSHA256 || len(evidence.VersionIDs) != 1 || evidence.VersionIDs[0] != confirmed.plan.TargetVersionID {
 		return RollbackResult{ProductionWriteSucceeded: true}, errors.New("Cloudflare rollback active deployment verification failed")

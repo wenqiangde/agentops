@@ -76,10 +76,21 @@ func Apply(ctx context.Context, writer DeploymentWriter, confirmed ConfirmedProd
 	}
 	evidence, err := writer.Deploy(ctx, confirmed.request)
 	if err != nil {
-		return ApplyResult{}, errors.New("Cloudflare trusted deployment failed")
+		return applyResultFromEvidence(evidence), errors.New("Cloudflare trusted deployment failed")
 	}
 	if !cloudflareUUIDPattern.MatchString(evidence.RequestID) || evidence.InputSHA256 != confirmed.request.ExpectedSHA256 || len(evidence.VersionIDs) != 1 || !cloudflareUUIDPattern.MatchString(evidence.VersionIDs[0]) {
 		return ApplyResult{ProductionWriteSucceeded: true}, errors.New("Cloudflare durable deployment identity is missing")
 	}
 	return ApplyResult{Success: true, ProductionWriteSucceeded: true, DeploymentID: evidence.RequestID, VersionIDs: append([]string(nil), evidence.VersionIDs...)}, nil
+}
+
+func applyResultFromEvidence(evidence opscloudflarepayload.Evidence) ApplyResult {
+	if !evidence.RemoteWritePossible {
+		return ApplyResult{}
+	}
+	return ApplyResult{
+		ProductionWriteSucceeded: true,
+		DeploymentID:             evidence.RequestID,
+		VersionIDs:               append([]string(nil), evidence.VersionIDs...),
+	}
 }

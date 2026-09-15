@@ -48,6 +48,8 @@ func TestSDKProductionTransportUploadsRequestedAssetsBeforeVersion(t *testing.T)
 			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"11111111-1111-4111-8111-111111111111","resources":{}}}`))
 		case 4:
 			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","created_on":"2026-09-15T00:00:00Z","source":"api","strategy":"percentage","versions":[]}}`))
+		case 5:
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","created_on":"2026-09-15T00:00:00Z","source":"api","strategy":"percentage","versions":[{"version_id":"11111111-1111-4111-8111-111111111111","percentage":100}]}}`))
 		default:
 			t.Fatalf("unexpected SDK request %s", request.URL.Path)
 		}
@@ -78,6 +80,7 @@ func TestSDKProductionTransportUploadsRequestedAssetsBeforeVersion(t *testing.T)
 		"POST /accounts/account/workers/assets/upload?base64=true",
 		"POST /accounts/account/workers/workers/worker/versions?deploy=false",
 		"POST /accounts/account/workers/scripts/worker/deployments",
+		"GET /accounts/account/workers/scripts/worker/deployments/22222222-2222-4222-8222-222222222222",
 	}
 	if strings.Join(paths, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("endpoint sequence=%v want=%v", paths, want)
@@ -111,6 +114,9 @@ func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testin
 			}
 			response.Header().Set("Content-Type", "application/json")
 			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","created_on":"2026-09-15T00:00:00Z","source":"api","strategy":"percentage","versions":[]}}`))
+		case 3:
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","created_on":"2026-09-15T00:00:00Z","source":"api","strategy":"percentage","versions":[{"version_id":"11111111-1111-4111-8111-111111111111","percentage":100}]}}`))
 		default:
 			t.Fatalf("unexpected SDK request %s", request.URL.Path)
 		}
@@ -137,6 +143,7 @@ func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testin
 	wantPaths := []string{
 		"POST /accounts/account/workers/scripts/worker/versions",
 		"POST /accounts/account/workers/scripts/worker/deployments",
+		"GET /accounts/account/workers/scripts/worker/deployments/22222222-2222-4222-8222-222222222222",
 	}
 	if strings.Join(paths, "\n") != strings.Join(wantPaths, "\n") {
 		t.Fatalf("endpoint sequence=%v want=%v", paths, wantPaths)
@@ -146,30 +153,22 @@ func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testin
 	}
 }
 
-func TestSDKProductionTransportReconcilesAndReadsPostWriteIdentity(t *testing.T) {
+func TestSDKProductionTransportChecksEndpointsReadOnlyBeforeWriting(t *testing.T) {
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		paths = append(paths, request.Method+" "+request.URL.RequestURI())
 		response.Header().Set("Content-Type", "application/json")
 		switch len(paths) {
 		case 1:
-			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"11111111-1111-4111-8111-111111111111","resources":{}}}`))
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[{"id":"domain","hostname":"admin.example.test","service":"worker","environment":"production","cert_id":"44444444-4444-4444-8444-444444444444","zone_id":"zone","zone_name":"example.test"}]}`))
 		case 2:
-			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","created_on":"2026-09-15T00:00:00Z","source":"api","strategy":"percentage","versions":[]}}`))
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"schedules":[{"cron":"*/30 * * * *"}]}}`))
 		case 3:
-			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[{"id":"old-domain","hostname":"old.example.test","service":"worker","environment":"production","cert_id":"33333333-3333-4333-8333-333333333333","zone_id":"zone","zone_name":"example.test"}]}`))
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"11111111-1111-4111-8111-111111111111","resources":{}}}`))
 		case 4:
-			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{}}`))
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","created_on":"2026-09-15T00:00:00Z","source":"api","strategy":"percentage","versions":[]}}`))
 		case 5:
-			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"new-domain","hostname":"admin.example.test","service":"worker","environment":"production","cert_id":"44444444-4444-4444-8444-444444444444","zone_id":"zone","zone_name":"example.test"}}`))
-		case 6:
-			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"schedules":[{"cron":"*/30 * * * *"}]}}`))
-		case 7:
 			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","created_on":"2026-09-15T00:00:00Z","source":"api","strategy":"percentage","versions":[{"version_id":"11111111-1111-4111-8111-111111111111","percentage":100}]}}`))
-		case 8:
-			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"schedules":[{"cron":"*/30 * * * *"}]}}`))
-		case 9:
-			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[{"id":"new-domain","hostname":"admin.example.test","service":"worker","environment":"production","cert_id":"44444444-4444-4444-8444-444444444444","zone_id":"zone","zone_name":"example.test"}]}`))
 		default:
 			t.Fatalf("unexpected request %s", request.URL.RequestURI())
 		}
@@ -196,19 +195,137 @@ func TestSDKProductionTransportReconcilesAndReadsPostWriteIdentity(t *testing.T)
 		t.Fatal(err)
 	}
 	want := []string{
+		"GET /accounts/account/workers/domains?service=worker",
+		"GET /accounts/account/workers/scripts/worker/schedules",
 		"POST /accounts/account/workers/scripts/worker/versions",
 		"POST /accounts/account/workers/scripts/worker/deployments",
-		"GET /accounts/account/workers/domains?service=worker",
-		"DELETE /accounts/account/workers/domains/old-domain",
-		"PUT /accounts/account/workers/domains",
-		"PUT /accounts/account/workers/scripts/worker/schedules",
 		"GET /accounts/account/workers/scripts/worker/deployments/22222222-2222-4222-8222-222222222222",
-		"GET /accounts/account/workers/scripts/worker/schedules",
-		"GET /accounts/account/workers/domains?service=worker",
 	}
 	if strings.Join(paths, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("endpoint sequence=%v want=%v", paths, want)
 	}
+}
+
+func TestSDKProductionTransportRejectsEndpointDriftBeforeAnyWrite(t *testing.T) {
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		methods = append(methods, request.Method)
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[]}`))
+	}))
+	defer server.Close()
+
+	config := CanonicalConfig{
+		Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15",
+		Routes: []RouteConfig{{Pattern: "admin.example.test", CustomDomain: true}},
+	}
+	payload := payloadForConfig(t, config, nil)
+	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newSDKProductionTransport(server.URL+"/").Deploy(context.Background(), []byte("bounded-test-token"), request); err == nil {
+		t.Fatal("endpoint drift was accepted")
+	}
+	for _, method := range methods {
+		if method != http.MethodGet {
+			t.Fatalf("endpoint drift caused remote write: %v", methods)
+		}
+	}
+}
+
+func TestSDKProductionTransportRejectsUnmappedNoAssetConfigurationBeforeNetwork(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*CanonicalConfig)
+	}{
+		{name: "KV", mutate: func(c *CanonicalConfig) {
+			c.KVNamespaces = []KVNamespace{{Binding: "CACHE", ID: strings.Repeat("1", 32)}}
+		}},
+		{name: "D1", mutate: func(c *CanonicalConfig) {
+			c.D1Databases = []D1Database{{Binding: "DB", DatabaseName: "db", DatabaseID: "11111111-1111-4111-8111-111111111111"}}
+		}},
+		{name: "R2", mutate: func(c *CanonicalConfig) { c.R2Buckets = []R2Bucket{{Binding: "MEDIA", BucketName: "media"}} }},
+		{name: "AI", mutate: func(c *CanonicalConfig) { c.AI = &AIBinding{Binding: "AI"} }},
+		{name: "Vectorize", mutate: func(c *CanonicalConfig) { c.Vectorize = []VectorizeIndex{{Binding: "SEARCH", IndexName: "index"}} }},
+		{name: "Durable Objects", mutate: func(c *CanonicalConfig) { c.DurableObjects = []DurableObject{{Name: "RUNNER", ClassName: "Runner"}} }},
+		{name: "migration", mutate: func(c *CanonicalConfig) { c.Migrations = []Migration{{Tag: "v1", NewClasses: []string{"Runner"}}} }},
+		{name: "vars", mutate: func(c *CanonicalConfig) { c.Vars = map[string]string{"MODE": "production"} }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls++ }))
+			defer server.Close()
+			config := CanonicalConfig{Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
+			test.mutate(&config)
+			payload := payloadForConfig(t, config, nil)
+			request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := newSDKProductionTransport(server.URL+"/").Deploy(context.Background(), []byte("bounded-test-token"), request); err == nil {
+				t.Fatal("unmapped no-asset configuration was accepted")
+			}
+			if calls != 0 {
+				t.Fatalf("unmapped no-asset configuration reached network %d times", calls)
+			}
+		})
+	}
+}
+
+func TestEndpointSequenceIsProfileOwnedAndStrict(t *testing.T) {
+	config := CanonicalConfig{
+		Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15",
+		Assets: &AssetsConfig{Binding: "ASSETS", RunWorkerFirst: true, NotFoundHandling: "single-page-application"},
+		Routes: []RouteConfig{{Pattern: "admin.example.test", CustomDomain: true}}, Crons: []string{"*/30 * * * *"},
+	}
+	payload := payloadForConfig(t, config, []Asset{{Path: "index.html", Bytes: []byte("approved")}})
+	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{endpointDomainsRead, endpointSchedulesRead, endpointAssetSession, endpointAssetUpload, endpointVersionCreate, endpointDeploymentCreate, endpointIdentityRead}
+	got, err := EndpointSequence(request)
+	if err != nil || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("sequence=%v err=%v", got, err)
+	}
+	guard, err := newEndpointSequenceGuard(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.consume(endpointSchedulesRead); err == nil {
+		t.Fatal("reordered endpoint was accepted")
+	}
+	guard, _ = newEndpointSequenceGuard(request)
+	if err := guard.consume(endpointDomainsRead); err != nil {
+		t.Fatal(err)
+	}
+	if err := guard.complete(); err == nil {
+		t.Fatal("incomplete endpoint sequence was accepted")
+	}
+	guard, _ = newEndpointSequenceGuard(request)
+	for _, endpoint := range want {
+		if err := guard.consume(endpoint); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := guard.complete(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func payloadForConfig(t *testing.T, config CanonicalConfig, assets []Asset) Payload {
+	t.Helper()
+	metadata, err := config.Metadata()
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := NewPayload("worker.mjs", []Module{{Name: "worker.mjs", Type: "application/javascript+module", Bytes: []byte("approved module")}}, assets, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
 }
 
 func TestSDKProductionTransportRollbackCreatesAndVerifiesExplicitVersionDeployment(t *testing.T) {
@@ -254,6 +371,61 @@ func TestSDKProductionTransportRollbackCreatesAndVerifiesExplicitVersionDeployme
 	}
 	if evidence.RequestID != "22222222-2222-4222-8222-222222222222" || len(evidence.VersionIDs) != 1 || evidence.VersionIDs[0] != request.TargetVersionID || evidence.InputSHA256 != request.ExpectedSHA256 {
 		t.Fatalf("unexpected evidence: %#v", evidence)
+	}
+}
+
+func TestSDKProductionTransportPreservesDeployIdentityOnReadbackFailure(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		calls++
+		response.Header().Set("Content-Type", "application/json")
+		switch calls {
+		case 1:
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"11111111-1111-4111-8111-111111111111","resources":{}}}`))
+		case 2:
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","versions":[]}}`))
+		default:
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":null}`))
+		}
+	}))
+	defer server.Close()
+	config := CanonicalConfig{Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
+	payload := payloadForConfig(t, config, nil)
+	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := newSDKProductionTransport(server.URL+"/").Deploy(context.Background(), []byte("bounded-test-token"), request)
+	if err == nil {
+		t.Fatal("failed identity read was reported as success")
+	}
+	if !evidence.RemoteWritePossible || evidence.RequestID != "22222222-2222-4222-8222-222222222222" || len(evidence.VersionIDs) != 1 || evidence.VersionIDs[0] != "11111111-1111-4111-8111-111111111111" {
+		t.Fatalf("deploy unknown-state evidence was lost: %#v", evidence)
+	}
+}
+
+func TestSDKProductionTransportPreservesRollbackIdentityOnReadbackFailure(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		calls++
+		response.Header().Set("Content-Type", "application/json")
+		if calls == 1 {
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","versions":[]}}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":null}`))
+	}))
+	defer server.Close()
+	request, err := NewRollbackRequest("account", "worker", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "11111111-1111-4111-8111-111111111111", strings.Repeat("4", 64), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := newSDKProductionTransport(server.URL+"/").Rollback(context.Background(), []byte("bounded-test-token"), request)
+	if err == nil {
+		t.Fatal("failed rollback identity read was reported as success")
+	}
+	if !evidence.RemoteWritePossible || evidence.RequestID != "22222222-2222-4222-8222-222222222222" || len(evidence.VersionIDs) != 1 || evidence.VersionIDs[0] != request.TargetVersionID {
+		t.Fatalf("rollback unknown-state evidence was lost: %#v", evidence)
 	}
 }
 

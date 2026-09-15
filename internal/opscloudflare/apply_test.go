@@ -2,6 +2,7 @@ package opscloudflare_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,35 @@ func TestApplyRejectsStaleOrMismatchedPayloadBeforeWriter(t *testing.T) {
 	}
 }
 
+func TestApplyPreservesUnknownRemoteStateFromWriterError(t *testing.T) {
+	request := deployPayloadRequest(t)
+	plan := deployConfirmedPlan(request.ExpectedSHA256)
+	identity := deployProductionIdentity()
+	digest, err := opscloudflare.ProductionDigest(plan, request, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := opscloudflare.ConfirmProduction(plan, request, identity, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordingDeploymentWriter{
+		evidence: opscloudflarepayload.Evidence{
+			RemoteWritePossible: true,
+			RequestID:           "22222222-2222-4222-8222-222222222222",
+			VersionIDs:          []string{"11111111-1111-4111-8111-111111111111"},
+		},
+		err: errors.New("identity read failed"),
+	}
+	result, err := opscloudflare.Apply(context.Background(), writer, confirmed)
+	if err == nil {
+		t.Fatal("unknown remote state was reported as success")
+	}
+	if !result.ProductionWriteSucceeded || result.DeploymentID != writer.evidence.RequestID || len(result.VersionIDs) != 1 || result.VersionIDs[0] != writer.evidence.VersionIDs[0] {
+		t.Fatalf("unknown remote state evidence was lost: %#v", result)
+	}
+}
+
 func deployProductionIdentity() opscloudflare.ProductionConfirmationIdentity {
 	return opscloudflare.ProductionConfirmationIdentity{
 		APIProfile: "wrangler-4.107-preveal-v1", ClientVersion: "cloudflare-go/v7.7.0",
@@ -75,12 +105,13 @@ type recordingDeploymentWriter struct {
 	calls    int
 	request  opscloudflarepayload.Request
 	evidence opscloudflarepayload.Evidence
+	err      error
 }
 
 func (w *recordingDeploymentWriter) Deploy(_ context.Context, request opscloudflarepayload.Request) (opscloudflarepayload.Evidence, error) {
 	w.calls++
 	w.request = request
-	return w.evidence, nil
+	return w.evidence, w.err
 }
 
 func deployPayloadRequest(t *testing.T) opscloudflarepayload.Request {

@@ -36,7 +36,10 @@ func TestApplyRollbackRevalidatesOwnedProductionConfirmationImmediatelyBeforeWri
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := internalProductionIdentity()
+	identity := ProductionConfirmationIdentity{
+		APIProfile: "wrangler-4.107-preveal-v1", ClientVersion: "cloudflare-go/v7.7.0",
+		EndpointSequence: opscloudflarepayload.RollbackEndpointSequence(request), TokenProviderIdentity: "environment",
+	}
 	digest, err := RollbackProductionDigest(plan, request, identity)
 	if err != nil {
 		t.Fatal(err)

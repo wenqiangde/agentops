@@ -46,6 +46,10 @@ func (s sdkProductionTransport) Deploy(ctx context.Context, token []byte, reques
 	if !sdkProfileSupported(config, request.Payload) {
 		return Evidence{}, errors.New("Cloudflare SDK production profile is unsupported")
 	}
+	sequence, err := newEndpointSequenceGuard(request)
+	if err != nil {
+		return Evidence{}, err
+	}
 
 	options := []option.RequestOption{option.WithEnvironmentProduction(), option.WithAPIToken(string(token))}
 	if s.baseURL != "" {
@@ -53,12 +57,20 @@ func (s sdkProductionTransport) Deploy(ctx context.Context, token []byte, reques
 	}
 	service := workers.NewWorkerService(options...)
 	started := time.Now().UTC()
+	evidence := Evidence{ClientVersion: cloudflareSDKVersion, InputSHA256: request.ExpectedSHA256, StartedAt: started}
+	if err := verifyEndpointsReadOnly(ctx, service, request, config, sequence); err != nil {
+		return evidence, err
+	}
 	var versionID string
 	if len(request.Payload.Assets) == 0 {
+		if err := sequence.consume(endpointVersionCreate); err != nil {
+			return Evidence{}, err
+		}
 		files := make([]io.Reader, len(request.Payload.Modules))
 		for index, module := range request.Payload.Modules {
 			files[index] = &namedModuleReader{Reader: bytes.NewReader(module.Bytes), name: module.Name, contentType: module.Type}
 		}
+		evidence.RemoteWritePossible = true
 		version, err := service.Scripts.Versions.New(ctx, request.Worker, workers.ScriptVersionNewParams{
 			AccountID: cloudflare.F(request.AccountID),
 			Metadata: cloudflare.F(workers.ScriptVersionNewParamsMetadata{
@@ -69,27 +81,36 @@ func (s sdkProductionTransport) Deploy(ctx context.Context, token []byte, reques
 			Files: cloudflare.F(files),
 		})
 		if err != nil || version == nil || version.ID == "" {
-			return Evidence{}, errors.New("Cloudflare SDK version upload failed")
+			return finishEvidence(evidence), errors.New("Cloudflare SDK version upload failed")
 		}
 		versionID = version.ID
 	} else {
-		completionToken, err := uploadAssets(ctx, service, request, config)
+		completionToken, writePossible, err := uploadAssets(ctx, service, request, config, sequence)
+		evidence.RemoteWritePossible = writePossible
 		if err != nil {
-			return Evidence{}, err
+			return finishEvidence(evidence), err
 		}
 		versionParams, err := versionParamFor(config, request.Payload, completionToken)
 		if err != nil {
-			return Evidence{}, err
+			return finishEvidence(evidence), err
 		}
+		if err := sequence.consume(endpointVersionCreate); err != nil {
+			return finishEvidence(evidence), err
+		}
+		evidence.RemoteWritePossible = true
 		version, err := service.Beta.Workers.Versions.New(ctx, request.Worker, workers.BetaWorkerVersionNewParams{
 			AccountID: cloudflare.F(request.AccountID),
 			Deploy:    cloudflare.F(false),
 			Version:   versionParams,
 		})
 		if err != nil || version == nil || version.ID == "" {
-			return Evidence{}, errors.New("Cloudflare SDK version upload failed")
+			return finishEvidence(evidence), errors.New("Cloudflare SDK version upload failed")
 		}
 		versionID = version.ID
+	}
+	evidence.VersionIDs = []string{versionID}
+	if err := sequence.consume(endpointDeploymentCreate); err != nil {
+		return finishEvidence(evidence), err
 	}
 	deployment, err := service.Scripts.Deployments.New(ctx, request.Worker, workers.ScriptDeploymentNewParams{
 		AccountID: cloudflare.F(request.AccountID),
@@ -102,21 +123,21 @@ func (s sdkProductionTransport) Deploy(ctx context.Context, token []byte, reques
 		},
 	})
 	if err != nil || deployment == nil || deployment.ID == "" {
-		return Evidence{}, errors.New("Cloudflare SDK deployment creation failed")
+		return finishEvidence(evidence), errors.New("Cloudflare SDK deployment creation failed")
 	}
-	if len(config.Routes) > 0 || len(config.Crons) > 0 {
-		if err := reconcileAndVerifyEndpoints(ctx, service, request, config, deployment.ID, versionID); err != nil {
-			return Evidence{}, err
-		}
+	evidence.RequestID = deployment.ID
+	if err := sequence.consume(endpointIdentityRead); err != nil {
+		return finishEvidence(evidence), err
 	}
-	return Evidence{
-		ClientVersion: cloudflareSDKVersion,
-		RequestID:     deployment.ID,
-		VersionIDs:    []string{versionID},
-		InputSHA256:   request.ExpectedSHA256,
-		StartedAt:     started,
-		FinishedAt:    time.Now().UTC(),
-	}, nil
+	current, err := service.Scripts.Deployments.Get(ctx, request.Worker, deployment.ID, workers.ScriptDeploymentGetParams{AccountID: cloudflare.F(request.AccountID)})
+	if err != nil || current == nil || current.ID != deployment.ID || len(current.Versions) != 1 || current.Versions[0].VersionID != versionID || current.Versions[0].Percentage != 100 {
+		return finishEvidence(evidence), errors.New("Cloudflare SDK deployment identity verification failed")
+	}
+	if err := sequence.complete(); err != nil {
+		return finishEvidence(evidence), err
+	}
+	evidence.RequestID = current.ID
+	return finishEvidence(evidence), nil
 }
 
 func (s sdkProductionTransport) Rollback(ctx context.Context, token []byte, request RollbackRequest) (Evidence, error) {
@@ -129,25 +150,38 @@ func (s sdkProductionTransport) Rollback(ctx context.Context, token []byte, requ
 	}
 	service := workers.NewWorkerService(options...)
 	started := time.Now().UTC()
+	sequence := newRollbackEndpointSequenceGuard(request)
+	evidence := Evidence{
+		ClientVersion: cloudflareSDKVersion, VersionIDs: []string{request.TargetVersionID},
+		InputSHA256: request.ExpectedSHA256, StartedAt: started,
+	}
+	if err := sequence.consume(endpointDeploymentCreate); err != nil {
+		return Evidence{}, err
+	}
+	evidence.RemoteWritePossible = true
 	deployment, err := service.Scripts.Deployments.New(ctx, request.Worker, workers.ScriptDeploymentNewParams{
 		AccountID:  cloudflare.F(request.AccountID),
 		Deployment: workers.DeploymentParam{Strategy: cloudflare.F(workers.DeploymentStrategyPercentage), Versions: cloudflare.F([]workers.DeploymentVersionParam{{Percentage: cloudflare.F(100.0), VersionID: cloudflare.F(request.TargetVersionID)}})},
 	})
 	if err != nil || deployment == nil || deployment.ID == "" || deployment.ID == request.PreviousDeploymentID {
-		return Evidence{}, errors.New("Cloudflare SDK rollback deployment failed")
+		return finishEvidence(evidence), errors.New("Cloudflare SDK rollback deployment failed")
+	}
+	evidence.RequestID = deployment.ID
+	if err := sequence.consume(endpointIdentityRead); err != nil {
+		return finishEvidence(evidence), err
 	}
 	current, err := service.Scripts.Deployments.Get(ctx, request.Worker, deployment.ID, workers.ScriptDeploymentGetParams{AccountID: cloudflare.F(request.AccountID)})
 	if err != nil || current == nil || current.ID != deployment.ID || len(current.Versions) != 1 || current.Versions[0].VersionID != request.TargetVersionID || current.Versions[0].Percentage != 100 {
-		return Evidence{}, errors.New("Cloudflare SDK rollback identity verification failed")
+		return finishEvidence(evidence), errors.New("Cloudflare SDK rollback identity verification failed")
 	}
-	return Evidence{ClientVersion: cloudflareSDKVersion, RequestID: current.ID, VersionIDs: []string{request.TargetVersionID}, InputSHA256: request.ExpectedSHA256, StartedAt: started, FinishedAt: time.Now().UTC()}, nil
+	if err := sequence.complete(); err != nil {
+		return finishEvidence(evidence), err
+	}
+	evidence.RequestID = current.ID
+	return finishEvidence(evidence), nil
 }
 
-func reconcileAndVerifyEndpoints(ctx context.Context, service *workers.WorkerService, request Request, config CanonicalConfig, deploymentID, versionID string) error {
-	domains, err := service.Domains.List(ctx, workers.DomainListParams{AccountID: cloudflare.F(request.AccountID), Service: cloudflare.F(request.Worker)})
-	if err != nil || domains == nil {
-		return errors.New("Cloudflare SDK domain read failed")
-	}
+func verifyEndpointsReadOnly(ctx context.Context, service *workers.WorkerService, request Request, config CanonicalConfig, sequence *endpointSequenceGuard) error {
 	desiredDomains := make(map[string]bool, len(config.Routes))
 	for _, route := range config.Routes {
 		if !route.CustomDomain {
@@ -155,39 +189,23 @@ func reconcileAndVerifyEndpoints(ctx context.Context, service *workers.WorkerSer
 		}
 		desiredDomains[route.Pattern] = true
 	}
-	for _, domain := range domains.Result {
-		if domain.Service == request.Worker && !desiredDomains[domain.Hostname] {
-			if _, err := service.Domains.Delete(ctx, domain.ID, workers.DomainDeleteParams{AccountID: cloudflare.F(request.AccountID)}); err != nil {
-				return errors.New("Cloudflare SDK stale domain removal failed")
-			}
+	if len(config.Routes) > 0 {
+		if err := sequence.consume(endpointDomainsRead); err != nil {
+			return err
+		}
+		domains, err := service.Domains.List(ctx, workers.DomainListParams{AccountID: cloudflare.F(request.AccountID), Service: cloudflare.F(request.Worker)})
+		if err != nil || domains == nil || !sameDomains(desiredDomains, domains.Result, request.Worker) {
+			return errors.New("Cloudflare SDK domain verification failed")
 		}
 	}
-	for hostname := range desiredDomains {
-		result, err := service.Domains.Update(ctx, workers.DomainUpdateParams{
-			AccountID: cloudflare.F(request.AccountID), Hostname: cloudflare.F(hostname), Service: cloudflare.F(request.Worker), Environment: cloudflare.F("production"),
-		})
-		if err != nil || result == nil || result.ID == "" || result.Hostname != hostname || result.Service != request.Worker {
-			return errors.New("Cloudflare SDK domain update failed")
+	if len(config.Crons) > 0 {
+		if err := sequence.consume(endpointSchedulesRead); err != nil {
+			return err
 		}
-	}
-	schedules := make([]workers.ScriptScheduleUpdateParamsBody, len(config.Crons))
-	for index, cron := range config.Crons {
-		schedules[index] = workers.ScriptScheduleUpdateParamsBody{Cron: cloudflare.F(cron)}
-	}
-	if _, err := service.Scripts.Schedules.Update(ctx, request.Worker, workers.ScriptScheduleUpdateParams{AccountID: cloudflare.F(request.AccountID), Body: schedules}); err != nil {
-		return errors.New("Cloudflare SDK schedule update failed")
-	}
-	deployment, err := service.Scripts.Deployments.Get(ctx, request.Worker, deploymentID, workers.ScriptDeploymentGetParams{AccountID: cloudflare.F(request.AccountID)})
-	if err != nil || deployment == nil || deployment.ID != deploymentID || len(deployment.Versions) != 1 || deployment.Versions[0].VersionID != versionID || deployment.Versions[0].Percentage != 100 {
-		return errors.New("Cloudflare SDK deployment identity verification failed")
-	}
-	actualSchedules, err := service.Scripts.Schedules.Get(ctx, request.Worker, workers.ScriptScheduleGetParams{AccountID: cloudflare.F(request.AccountID)})
-	if err != nil || actualSchedules == nil || !sameSchedules(config.Crons, actualSchedules.Schedules) {
-		return errors.New("Cloudflare SDK schedule verification failed")
-	}
-	actualDomains, err := service.Domains.List(ctx, workers.DomainListParams{AccountID: cloudflare.F(request.AccountID), Service: cloudflare.F(request.Worker)})
-	if err != nil || actualDomains == nil || !sameDomains(desiredDomains, actualDomains.Result, request.Worker) {
-		return errors.New("Cloudflare SDK domain verification failed")
+		actualSchedules, err := service.Scripts.Schedules.Get(ctx, request.Worker, workers.ScriptScheduleGetParams{AccountID: cloudflare.F(request.AccountID)})
+		if err != nil || actualSchedules == nil || !sameSchedules(config.Crons, actualSchedules.Schedules) {
+			return errors.New("Cloudflare SDK schedule verification failed")
+		}
 	}
 	return nil
 }
@@ -293,7 +311,7 @@ func versionParamFor(config CanonicalConfig, payload Payload, completionToken st
 	return version, nil
 }
 
-func uploadAssets(ctx context.Context, service *workers.WorkerService, request Request, config CanonicalConfig) (string, error) {
+func uploadAssets(ctx context.Context, service *workers.WorkerService, request Request, config CanonicalConfig, sequence *endpointSequenceGuard) (string, bool, error) {
 	manifest := make(map[string]workers.ScriptAssetUploadNewParamsManifest, len(request.Payload.Assets))
 	assets := make(map[string]Asset, len(request.Payload.Assets))
 	for _, asset := range request.Payload.Assets {
@@ -303,18 +321,24 @@ func uploadAssets(ctx context.Context, service *workers.WorkerService, request R
 		}
 		assets[hash] = asset
 	}
+	if err := sequence.consume(endpointAssetSession); err != nil {
+		return "", false, err
+	}
 	session, err := service.Scripts.Assets.Upload.New(ctx, request.Worker, workers.ScriptAssetUploadNewParams{
 		AccountID: cloudflare.F(request.AccountID), Manifest: cloudflare.F(manifest),
 	})
 	if err != nil || session == nil || session.JWT == "" {
-		return "", errors.New("Cloudflare SDK asset session failed")
+		return "", true, errors.New("Cloudflare SDK asset session failed")
+	}
+	if err := sequence.consume(endpointAssetUpload); err != nil {
+		return "", true, err
 	}
 	for _, bucket := range session.Buckets {
 		body := make(map[string]string, len(bucket))
 		for _, hash := range bucket {
 			asset, ok := assets[hash]
 			if !ok {
-				return "", errors.New("Cloudflare SDK asset session requested an unknown asset")
+				return "", true, errors.New("Cloudflare SDK asset session requested an unknown asset")
 			}
 			body[hash] = base64.StdEncoding.EncodeToString(asset.Bytes)
 		}
@@ -322,11 +346,16 @@ func uploadAssets(ctx context.Context, service *workers.WorkerService, request R
 			AccountID: cloudflare.F(request.AccountID), Base64: cloudflare.F(workers.AssetUploadNewParamsBase64True), Body: body,
 		}, option.WithHeader("Authorization", "Bearer "+session.JWT))
 		if err != nil || result == nil || result.JWT == "" {
-			return "", errors.New("Cloudflare SDK asset upload failed")
+			return "", true, errors.New("Cloudflare SDK asset upload failed")
 		}
 		session.JWT = result.JWT
 	}
-	return session.JWT, nil
+	return session.JWT, true, nil
+}
+
+func finishEvidence(evidence Evidence) Evidence {
+	evidence.FinishedAt = time.Now().UTC()
+	return evidence
 }
 
 func assetManifestHash(asset Asset) string {
@@ -350,10 +379,19 @@ func sdkProfileSupported(config CanonicalConfig, payload Payload) bool {
 	if !assetsMatch || len(config.Migrations) > 1 {
 		return false
 	}
+	if len(payload.Assets) == 0 && hasVersionMetadataRequiringBetaAPI(config) {
+		return false
+	}
 	for _, route := range config.Routes {
 		if !route.CustomDomain {
 			return false
 		}
 	}
 	return true
+}
+
+func hasVersionMetadataRequiringBetaAPI(config CanonicalConfig) bool {
+	return len(config.KVNamespaces) > 0 || len(config.D1Databases) > 0 || len(config.R2Buckets) > 0 ||
+		config.AI != nil || len(config.Vectorize) > 0 || len(config.DurableObjects) > 0 ||
+		len(config.Migrations) > 0 || len(config.Vars) > 0
 }

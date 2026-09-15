@@ -59,6 +59,10 @@ func ProductionCanonicalJSON(plan CloudflareDeployPlan, request opscloudflarepay
 	if !validProductionIdentity(identity) {
 		return nil, errors.New("Cloudflare production execution identity is invalid")
 	}
+	expectedSequence, err := opscloudflarepayload.EndpointSequence(request)
+	if err != nil || !equalEndpointSequence(identity.EndpointSequence, expectedSequence) {
+		return nil, errors.New("Cloudflare production endpoint sequence is invalid")
+	}
 	metadataDigest := sha256.Sum256(request.Payload.Metadata)
 	material := productionConfirmationMaterial{
 		Plan: planJSON, APIProfile: identity.APIProfile, ClientVersion: identity.ClientVersion,
@@ -88,11 +92,26 @@ func RollbackProductionCanonicalJSON(plan CloudflareRollbackPlan, request opsclo
 	if !validProductionIdentity(identity) {
 		return nil, errors.New("Cloudflare production execution identity is invalid")
 	}
+	if !equalEndpointSequence(identity.EndpointSequence, opscloudflarepayload.RollbackEndpointSequence(request)) {
+		return nil, errors.New("Cloudflare rollback endpoint sequence is invalid")
+	}
 	material := rollbackProductionConfirmationMaterial{
 		Plan: planJSON, APIProfile: identity.APIProfile, ClientVersion: identity.ClientVersion,
 		EndpointSequence: append([]string(nil), identity.EndpointSequence...), TokenProviderIdentity: identity.TokenProviderIdentity,
 	}
 	return json.Marshal(material)
+}
+
+func equalEndpointSequence(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func RollbackProductionDigest(plan CloudflareRollbackPlan, request opscloudflarepayload.RollbackRequest, identity ProductionConfirmationIdentity) (string, error) {
