@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wenqiangde/agentops/internal/opscloudflare"
 	"github.com/wenqiangde/agentops/internal/opsconfig"
 	"github.com/wenqiangde/agentops/internal/opsexec"
 	"github.com/wenqiangde/agentops/internal/opshealth"
@@ -62,6 +63,68 @@ func TestOpsDeployRoutesCloudflareWorkerToReadOnlyPreview(t *testing.T) {
 		if request.Program != "node_modules/.bin/wrangler" || request.Directory != snapshotPath || request.Directory == sourcePath || request.Timeout != 30*time.Second || strings.Join(request.Args, "\x00") != strings.Join(wantArgs[index], "\x00") {
 			t.Fatalf("request[%d]=%+v snapshot=%q", index, request, snapshotPath)
 		}
+	}
+}
+
+func TestOpsDeployPreviewUsesRepositoryScopeSnapshotForSiblingAssets(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLIFile(t, filepath.Join(sourcePath, "wrangler.jsonc"), `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","assets":{"directory":"../admin"}}`, 0o644)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+	fake := successfulCLICloudflareExecutor()
+	siblingVisible := false
+	fake.afterRun = func(request opsexec.Request) {
+		if len(request.Args) > 1 && request.Args[0] == "deploy" && request.Args[1] == "--dry-run" {
+			_, err := os.Stat(filepath.Join(filepath.Dir(request.Directory), "admin", "index.html"))
+			siblingVisible = err == nil
+		}
+	}
+	original := opsCloudflareExecutor
+	opsCloudflareExecutor = func() opsexec.Executor { return fake }
+	t.Cleanup(func() { opsCloudflareExecutor = original })
+
+	var stdout, stderr bytes.Buffer
+	code, _ := executeRootCommand(p, []string{
+		"ops", "deploy", "example-relay", "--environment", "production", "--version", "2026.09.15-1",
+	}, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
+	}
+	if len(fake.requests) != 3 {
+		t.Fatalf("requests=%+v", fake.requests)
+	}
+	snapshotSource := fake.requests[0].Directory
+	if filepath.Base(snapshotSource) != "relay" {
+		t.Fatalf("Wrangler directory=%q", snapshotSource)
+	}
+	if !siblingVisible {
+		t.Fatal("sibling scope was not visible during Wrangler dry-run")
+	}
+}
+
+func TestOpsDeployStartsWranglerTimeoutAfterSnapshotCreation(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	replacePolicyValue(t, p.OperationsRoot, "defaultTimeout: 30s", "defaultTimeout: 500ms")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+
+	previousSnapshot := opsCloudflareSnapshot
+	opsCloudflareSnapshot = func(root, source string, scopes []string) (opscloudflare.SourceSnapshot, error) {
+		snapshot, err := previousSnapshot(root, source, scopes)
+		time.Sleep(600 * time.Millisecond)
+		return snapshot, err
+	}
+	t.Cleanup(func() { opsCloudflareSnapshot = previousSnapshot })
+	fake := &contextCheckingCloudflareExecutor{cliCloudflareExecutor: successfulCLICloudflareExecutor()}
+	previousExecutor := opsCloudflareExecutor
+	opsCloudflareExecutor = func() opsexec.Executor { return fake }
+	t.Cleanup(func() { opsCloudflareExecutor = previousExecutor })
+
+	var stdout, stderr bytes.Buffer
+	if code, _ := executeRootCommand(p, []string{
+		"ops", "deploy", "example-relay", "--environment", "production", "--version", "2026.09.15-1",
+	}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
 	}
 }
 
@@ -556,6 +619,17 @@ type cliCloudflareExecutor struct {
 	requests []opsexec.Request
 	results  []opsexec.Result
 	afterRun func(opsexec.Request)
+}
+
+type contextCheckingCloudflareExecutor struct {
+	*cliCloudflareExecutor
+}
+
+func (e *contextCheckingCloudflareExecutor) Run(ctx context.Context, request opsexec.Request) opsexec.Result {
+	if err := ctx.Err(); err != nil {
+		return opsexec.Result{ExitCode: -1, Err: err}
+	}
+	return e.cliCloudflareExecutor.Run(ctx, request)
 }
 
 func (e *cliCloudflareExecutor) Run(_ context.Context, request opsexec.Request) opsexec.Result {

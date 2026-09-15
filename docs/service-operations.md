@@ -87,6 +87,13 @@ in `package.json`, include a lockfile, and have an executable
 `node_modules/.bin/wrangler`. AgentOps never falls back to an unpinned global
 binary or `npx wrangler@latest`.
 
+AgentOps snapshots only the declared `deploymentScope` entries, preserving
+their paths relative to `repositoryRoot`. Wrangler still runs from the copied
+`source.path`, so a Worker may reference a sibling build output such as
+`../example-admin/dist` only when that sibling is also a declared deployment
+scope. Undeclared siblings and symlinks that resolve outside the declared
+scopes are rejected before Wrangler runs.
+
 This mode supports inventory validation, listing, inspection, HTTP health,
 preview-gated deployment, and version-based rollback. Cloudflare backup is not
 available. Worker writes require the exact preview digest and produce a private
@@ -299,14 +306,14 @@ boundary, and persists audit evidence through descriptor-relative operations.
 That implementation must pass the elevated-risk independent review before the
 gate is removed.
 
-The preview copies the complete Worker source into a
-private controlled snapshot, including ignored build output and project-local
-dependencies. The resolved
-`source.path` and nested config must remain inside their resolved roots. Internal
-npm links such as `node_modules/.bin/wrangler` are rewritten into the snapshot;
-links resolving outside the source are rejected. Wrangler `main`, assets/site
-directories, and build working directories must be clean relative paths inside
-the snapshot. These checks support preview integrity but do not by themselves
+The preview copies every declared deployment scope into a private controlled
+snapshot rooted at the repository layout, including ignored build output and
+project-local dependencies. Wrangler runs from the snapshot copy of
+`source.path`. The resolved source, config, Wrangler `main`, assets/site
+directories, and build working directories must remain inside the declared
+snapshot scopes. Internal npm links such as `node_modules/.bin/wrangler` are
+rewritten into the snapshot; links resolving outside the declared scopes are
+rejected. These checks support preview integrity but do not by themselves
 authorize a production write.
 
 Rollback requires an explicit Worker version UUID or a deployment UUID that
@@ -339,7 +346,7 @@ Repository cleanliness and frozen deployment input are separate concepts:
   Wrangler version, base commit, or requested version change requires a new
   preview and digest.
 - Ignored files are absent from Git cleanliness evidence but remain part of the
-  complete source snapshot digest when they can be read from `source.path`.
+  complete deployment snapshot digest when they are inside a declared scope.
 
 ### Remediation And Stop Conditions
 

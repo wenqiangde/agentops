@@ -97,6 +97,52 @@ func TestInspectRejectsWranglerConfigPathsOutsideSource(t *testing.T) {
 	}
 }
 
+func TestInspectAcceptsWranglerInputInDeclaredSiblingScope(t *testing.T) {
+	repositoryRoot := t.TempDir()
+	sourcePath := filepath.Join(repositoryRoot, "relay")
+	writeFile(t, filepath.Join(sourcePath, "package.json"), `{"devDependencies":{"wrangler":"~4.35.0"}}`, 0o644)
+	writeFile(t, filepath.Join(sourcePath, "package-lock.json"), `{}`, 0o644)
+	writeFile(t, filepath.Join(sourcePath, "node_modules", ".bin", "wrangler"), "#!/usr/bin/env node\n", 0o755)
+	writeFile(t, filepath.Join(sourcePath, "wrangler.jsonc"), `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","assets":{"directory":"../admin/dist"}}`, 0o644)
+	writeFile(t, filepath.Join(repositoryRoot, "admin", "dist", "index.html"), "admin\n", 0o644)
+	executor := &recordingExecutor{results: []opsexec.Result{
+		{ExitCode: 0, Stdout: "4.35.0\n"},
+		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`},
+	}}
+
+	_, err := opscloudflare.Inspect(context.Background(), executor, opscloudflare.Request{
+		SourcePath: sourcePath, RepositoryRoot: repositoryRoot, DeploymentScope: []string{"relay", "admin"},
+		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
+		WranglerConfig: "wrangler.jsonc", Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInspectRejectsWranglerInputInUndeclaredSiblingScope(t *testing.T) {
+	repositoryRoot := t.TempDir()
+	sourcePath := filepath.Join(repositoryRoot, "relay")
+	writeFile(t, filepath.Join(sourcePath, "package.json"), `{"devDependencies":{"wrangler":"~4.35.0"}}`, 0o644)
+	writeFile(t, filepath.Join(sourcePath, "package-lock.json"), `{}`, 0o644)
+	writeFile(t, filepath.Join(sourcePath, "node_modules", ".bin", "wrangler"), "#!/usr/bin/env node\n", 0o755)
+	writeFile(t, filepath.Join(sourcePath, "wrangler.jsonc"), `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","assets":{"directory":"../admin/dist"}}`, 0o644)
+	writeFile(t, filepath.Join(repositoryRoot, "admin", "dist", "index.html"), "admin\n", 0o644)
+	executor := &recordingExecutor{}
+
+	_, err := opscloudflare.Inspect(context.Background(), executor, opscloudflare.Request{
+		SourcePath: sourcePath, RepositoryRoot: repositoryRoot, DeploymentScope: []string{"relay"},
+		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
+		WranglerConfig: "wrangler.jsonc", Timeout: 5 * time.Second,
+	})
+	if err == nil {
+		t.Fatal("undeclared sibling Wrangler input was accepted")
+	}
+	if len(executor.requests) != 0 {
+		t.Fatalf("unsafe config executed commands: %+v", executor.requests)
+	}
+}
+
 func TestInspectRejectsWrongAccountAndConfigIdentity(t *testing.T) {
 	tests := []struct {
 		name      string

@@ -38,6 +38,86 @@ func TestCreateSourceSnapshotCopiesIgnoredInputsAndInternalSymlinks(t *testing.T
 	}
 }
 
+func TestCreateDeploymentSnapshotCopiesDeclaredSiblingScopesAndPreservesSourcePath(t *testing.T) {
+	repositoryRoot := t.TempDir()
+	sourcePath := filepath.Join(repositoryRoot, "relay")
+	writeFile(t, filepath.Join(sourcePath, "src", "index.ts"), "worker\n", 0o644)
+	writeFile(t, filepath.Join(repositoryRoot, "admin", "dist", "index.html"), "admin\n", 0o644)
+	writeFile(t, filepath.Join(repositoryRoot, "private", "secret.txt"), "secret\n", 0o600)
+
+	snapshot, err := opscloudflare.CreateDeploymentSnapshot(repositoryRoot, sourcePath, []string{"relay", "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(snapshot.Cleanup)
+	if snapshot.Root == repositoryRoot || snapshot.Path != filepath.Join(snapshot.Root, "relay") {
+		t.Fatalf("snapshot=%+v", snapshot)
+	}
+	for _, path := range []string{
+		filepath.Join(snapshot.Path, "src", "index.ts"),
+		filepath.Join(snapshot.Root, "admin", "dist", "index.html"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("declared scope path %q missing: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(snapshot.Root, "private", "secret.txt")); !os.IsNotExist(err) {
+		t.Fatalf("undeclared scope copied: %v", err)
+	}
+}
+
+func TestCreateDeploymentSnapshotRejectsDuplicateAndOverlappingScopes(t *testing.T) {
+	repositoryRoot := t.TempDir()
+	sourcePath := filepath.Join(repositoryRoot, "relay")
+	writeFile(t, filepath.Join(sourcePath, "src", "index.ts"), "worker\n", 0o644)
+
+	for _, scopes := range [][]string{
+		{"relay", "relay"},
+		{"relay", "relay/src"},
+	} {
+		if _, err := opscloudflare.CreateDeploymentSnapshot(repositoryRoot, sourcePath, scopes); err == nil {
+			t.Fatalf("unsafe scopes accepted: %v", scopes)
+		}
+	}
+}
+
+func TestCreateDeploymentSnapshotRejectsSymlinkIntoUndeclaredScope(t *testing.T) {
+	repositoryRoot := t.TempDir()
+	sourcePath := filepath.Join(repositoryRoot, "relay")
+	writeFile(t, filepath.Join(sourcePath, "src", "index.ts"), "worker\n", 0o644)
+	writeFile(t, filepath.Join(repositoryRoot, "private", "secret.txt"), "secret\n", 0o600)
+	if err := os.Symlink(filepath.Join("..", "..", "private", "secret.txt"), filepath.Join(sourcePath, "src", "linked")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := opscloudflare.CreateDeploymentSnapshot(repositoryRoot, sourcePath, []string{"relay"}); err == nil {
+		t.Fatal("symlink into undeclared scope was accepted")
+	}
+}
+
+func TestDeploymentSnapshotDigestIncludesIgnoredBytesAcrossScopes(t *testing.T) {
+	repositoryRoot := t.TempDir()
+	sourcePath := filepath.Join(repositoryRoot, "relay")
+	writeFile(t, filepath.Join(sourcePath, "src", "index.ts"), "worker\n", 0o644)
+	asset := filepath.Join(repositoryRoot, "admin", "dist", "index.html")
+	writeFile(t, asset, "first\n", 0o644)
+
+	first, err := opscloudflare.CreateDeploymentSnapshot(repositoryRoot, sourcePath, []string{"relay", "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Cleanup()
+	writeFile(t, asset, "second\n", 0o644)
+	second, err := opscloudflare.CreateDeploymentSnapshot(repositoryRoot, sourcePath, []string{"relay", "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(second.Cleanup)
+	if first.SHA256 == second.SHA256 {
+		t.Fatal("ignored sibling-scope byte change did not change snapshot digest")
+	}
+}
+
 func TestCreateSourceSnapshotRejectsExternalSymlink(t *testing.T) {
 	root := t.TempDir()
 	external := filepath.Join(t.TempDir(), "secret")

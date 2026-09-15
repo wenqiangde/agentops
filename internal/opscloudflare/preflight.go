@@ -23,11 +23,13 @@ var (
 )
 
 type Request struct {
-	SourcePath     string
-	Worker         string
-	AccountID      string
-	WranglerConfig string
-	Timeout        time.Duration
+	SourcePath      string
+	RepositoryRoot  string
+	DeploymentScope []string
+	Worker          string
+	AccountID       string
+	WranglerConfig  string
+	Timeout         time.Duration
 }
 
 type Evidence struct {
@@ -127,7 +129,7 @@ func validateProjectFiles(request Request) error {
 	if err != nil {
 		return err
 	}
-	if err := validateWranglerInputPaths(request.SourcePath, config); err != nil {
+	if err := validateWranglerInputPaths(request, config); err != nil {
 		return err
 	}
 	if config.Name != request.Worker {
@@ -139,21 +141,36 @@ func validateProjectFiles(request Request) error {
 	return nil
 }
 
-func validateWranglerInputPaths(source string, config wranglerConfig) error {
+func validateWranglerInputPaths(request Request, config wranglerConfig) error {
+	root := request.RepositoryRoot
+	scopes := request.DeploymentScope
+	if root == "" {
+		root = request.SourcePath
+		scopes = []string{"."}
+	}
+	resolvedRoot, rootErr := filepath.EvalSymlinks(root)
+	resolvedSource, sourceErr := filepath.EvalSymlinks(request.SourcePath)
+	if rootErr != nil || sourceErr != nil || !pathWithin(resolvedRoot, resolvedSource) {
+		return errors.New("Wrangler source path must remain inside repository root")
+	}
 	for _, value := range []string{config.Main, config.Assets.Directory, config.Site.Bucket, config.Build.CWD} {
 		if value == "" {
 			continue
 		}
 		clean := filepath.Clean(value)
-		if !utf8.ValidString(value) || filepath.IsAbs(value) || clean != value || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-			return errors.New("Wrangler input paths must remain inside source path")
+		if !utf8.ValidString(value) || filepath.IsAbs(value) || clean != value {
+			return errors.New("Wrangler input path must be clean and relative")
 		}
-		candidate := filepath.Join(source, clean)
+		candidate := filepath.Join(request.SourcePath, clean)
+		relative, err := filepath.Rel(root, candidate)
+		if err != nil || !pathInScopes(relative, scopes) {
+			return errors.New("Wrangler input path is outside deployment scopes")
+		}
 		if _, err := os.Lstat(candidate); err == nil {
-			resolvedSource, sourceErr := filepath.EvalSymlinks(source)
 			resolvedCandidate, candidateErr := filepath.EvalSymlinks(candidate)
-			if sourceErr != nil || candidateErr != nil || !pathWithin(resolvedSource, resolvedCandidate) {
-				return errors.New("Wrangler input paths must remain inside source path")
+			resolvedRelative, relativeErr := filepath.Rel(resolvedRoot, resolvedCandidate)
+			if candidateErr != nil || relativeErr != nil || !pathWithin(resolvedRoot, resolvedCandidate) || !pathInScopes(resolvedRelative, scopes) {
+				return errors.New("Wrangler resolved input path is outside deployment scopes")
 			}
 		}
 	}

@@ -134,28 +134,30 @@ func opsRollback(p paths.Paths, args []string, stdout, stderr io.Writer) int {
 }
 
 func opsCloudflareRollback(reportRoot string, service opsconfig.Service, production opsconfig.Environment, targetID string, confirm bool, previewDigest string, timeout time.Duration, stdout, stderr io.Writer) int {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	gitEvidence, err := opsgit.Inspect(ctx, opsgit.Request{RepositoryRoot: service.Source.RepositoryRoot, Scopes: service.Source.DeploymentScope})
+	gitCtx, gitCancel := context.WithTimeout(context.Background(), timeout)
+	gitEvidence, err := opsgit.Inspect(gitCtx, opsgit.Request{RepositoryRoot: service.Source.RepositoryRoot, Scopes: service.Source.DeploymentScope})
+	gitCancel()
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback Git scope inspection failed")
 		return 1
 	}
-	snapshot, err := opscloudflare.CreateSourceSnapshot(service.Source.Path)
+	snapshot, err := opsCloudflareSnapshot(service.Source.RepositoryRoot, service.Source.Path, service.Source.DeploymentScope)
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare source snapshot failed")
 		return 1
 	}
 	defer snapshot.Cleanup()
-	plan, err := opscloudflare.CreateRollbackPlan(ctx, opsCloudflareExecutor(), opscloudflare.RollbackPlanRequest{
+	planCtx, planCancel := context.WithTimeout(context.Background(), timeout)
+	plan, err := opscloudflare.CreateRollbackPlan(planCtx, opsCloudflareExecutor(), opscloudflare.RollbackPlanRequest{
 		Service: service.ID, TargetID: targetID, Git: gitEvidence,
 		Preflight: opscloudflare.Request{
-			SourcePath: snapshot.Path, Worker: production.Worker, AccountID: production.AccountID,
+			SourcePath: snapshot.Path, RepositoryRoot: snapshot.Root, DeploymentScope: service.Source.DeploymentScope, Worker: production.Worker, AccountID: production.AccountID,
 			WranglerConfig: production.WranglerConfig, Timeout: timeout,
 		},
 		RepositorySourcePath: service.Source.Path, DeploymentInputSHA256: snapshot.SHA256,
 		RequireCommittedScope: service.Deployment.RequireCommittedScope,
 	})
+	planCancel()
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview failed")
 		return 1
@@ -190,16 +192,18 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest is stale")
 		return 1
 	}
-	if err := revalidateCloudflareGitEvidence(ctx, service, gitEvidence); err != nil {
+	applyCtx, applyCancel := context.WithTimeout(context.Background(), timeout)
+	defer applyCancel()
+	if err := revalidateCloudflareGitEvidence(applyCtx, service, gitEvidence); err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest is stale")
 		return 1
 	}
-	if err := opscloudflare.SealSourceSnapshot(snapshot.Path, snapshot.SHA256); err != nil {
+	if err := opscloudflare.SealSourceSnapshot(snapshot.Root, snapshot.SHA256); err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest is stale")
 		return 1
 	}
 	started := time.Now().UTC()
-	result, err := opscloudflare.ApplyRollback(ctx, opsCloudflareExecutor(), confirmed)
+	result, err := opscloudflare.ApplyRollback(applyCtx, opsCloudflareExecutor(), confirmed)
 	if err != nil || !result.Success {
 		if result.ProductionWriteSucceeded {
 			if reportErr := writeCloudflareRollbackFailureReport(reportRoot, digest, plan, started, time.Now().UTC(), stdout); reportErr != nil {
@@ -210,7 +214,7 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback apply failed")
 		return 1
 	}
-	health := opsHealthProbe(ctx, opsCloudflareExecutor(), production, production.Health, timeout)
+	health := opsHealthProbe(applyCtx, opsCloudflareExecutor(), production, production.Health, timeout)
 	finished := time.Now().UTC()
 	operationID, err := newOpsOperationID("cloudflare-rollback")
 	if err != nil {
