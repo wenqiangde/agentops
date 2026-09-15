@@ -136,7 +136,7 @@ func TestRollbackProductionDigestBindsTargetAndTrustedExecutionIdentity(t *testi
 	}
 	identity := opscloudflare.ProductionConfirmationIdentity{
 		APIProfile: "wrangler-4.107-preveal-v1", ClientVersion: "cloudflare-go/v7.7.0",
-		EndpointSequence: []string{"deployment-create", "identity-read"}, TokenProviderIdentity: "environment",
+		EndpointSequence: []string{"current-deployment-read", "deployment-create", "identity-read"}, TokenProviderIdentity: "environment",
 	}
 	baseline, err := opscloudflare.RollbackProductionDigest(plan, request, identity)
 	if err != nil {
@@ -160,7 +160,7 @@ func TestRollbackProductionDigestBindsTargetAndTrustedExecutionIdentity(t *testi
 func productionDigestFixture(t *testing.T) (opscloudflare.CloudflareDeployPlan, opscloudflarepayload.Request, opscloudflare.ProductionConfirmationIdentity) {
 	t.Helper()
 	payload := mustProductionPayload(t, "2026-09-15", "approved module", "approved asset")
-	request, err := opscloudflarepayload.NewRequest("0123456789abcdef0123456789abcdef", "example-worker", payload.SHA256, payload, 5*time.Second)
+	request, err := opscloudflarepayload.NewRequest("0123456789abcdef0123456789abcdef", "example-worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

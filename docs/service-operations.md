@@ -284,6 +284,7 @@ and the project-local dry run:
 ```text
 node_modules/.bin/wrangler --version
 node_modules/.bin/wrangler whoami --account <account-id> --json
+node_modules/.bin/wrangler deployments status --json --config <file>
 node_modules/.bin/wrangler deploy --dry-run --config <file>
 ```
 
@@ -300,6 +301,13 @@ classification, one correlation ID shared by that preview, and a fixed safe
 remediation message. Runtime diagnostics are excluded from the canonical
 preview digest, so elapsed time and correlation ID changes do not invalidate an
 otherwise identical plan.
+
+The preview binds the active deployment ID and version IDs. The trusted SDK
+transport reads domains, schedules, and the latest active deployment again
+immediately before its first asset, version, or deployment write. Any endpoint
+or deployment identity drift, timeout, or malformed response fails before a
+write. Deploy and rollback both retain a separate post-write deployment
+identity readback.
 
 An external-stage failure prints the same bounded fields as a single diagnostic
 line. It never includes raw Wrangler stdout/stderr, tokens, the complete account

@@ -37,10 +37,11 @@ func TestCreatePlanOnlyReadsIdentityAndRunsWranglerDryRun(t *testing.T) {
 	executor := &recordingExecutor{results: []opsexec.Result{
 		{ExitCode: 0, Stdout: "4.35.0\n"},
 		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`},
+		{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`},
 		{ExitCode: 0, Stdout: "dry-run output must not enter the plan"},
 	}}
 
-	_, err := opscloudflare.CreatePlan(context.Background(), executor, opscloudflare.PlanRequest{
+	plan, err := opscloudflare.CreatePlan(context.Background(), executor, opscloudflare.PlanRequest{
 		Service:          "example-relay",
 		RequestedVersion: "2026.09.14-1",
 		Git: opsgit.Evidence{
@@ -69,6 +70,10 @@ func TestCreatePlanOnlyReadsIdentityAndRunsWranglerDryRun(t *testing.T) {
 			Directory: sourcePath, Timeout: 5 * time.Second,
 		},
 		{
+			Program: "node_modules/.bin/wrangler", Args: []string{"deployments", "status", "--json", "--config", "wrangler.jsonc"},
+			Directory: sourcePath, Timeout: 5 * time.Second,
+		},
+		{
 			Program:   "node_modules/.bin/wrangler",
 			Args:      []string{"deploy", "--dry-run", "--config", "wrangler.jsonc"},
 			Directory: sourcePath, Timeout: 5 * time.Second,
@@ -76,6 +81,9 @@ func TestCreatePlanOnlyReadsIdentityAndRunsWranglerDryRun(t *testing.T) {
 	}
 	if !reflect.DeepEqual(executor.requests, want) {
 		t.Fatalf("requests=%+v want=%+v", executor.requests, want)
+	}
+	if plan.CurrentDeploymentID != "11111111-1111-4111-8111-111111111111" || !reflect.DeepEqual(plan.CurrentVersionIDs, []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}) {
+		t.Fatalf("current deployment identity missing from plan: %#v", plan)
 	}
 	for _, request := range executor.requests {
 		if len(request.Args) > 0 && request.Args[0] == "deploy" && !containsArgument(request.Args, "--dry-run") {
@@ -183,6 +191,7 @@ func createPlanDigest(t *testing.T, request opscloudflare.PlanRequest, version, 
 	executor := &recordingExecutor{results: []opsexec.Result{
 		{ExitCode: 0, Stdout: version + "\n"},
 		{ExitCode: 0, Stdout: `{"accounts":[{"id":"` + request.Preflight.AccountID + `"}]}`},
+		{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`},
 		{ExitCode: 0, Stdout: dryRunOutput},
 	}}
 	plan, err := opscloudflare.CreatePlan(context.Background(), executor, request)

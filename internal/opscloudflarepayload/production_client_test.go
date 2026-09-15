@@ -23,7 +23,7 @@ func TestProductionClientDeployUsesOwnedPathFreeRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := opscloudflarepayload.NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := opscloudflarepayload.NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestProductionClientRetainedDescriptorCannotChangePreparedPayload(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := opscloudflarepayload.NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := opscloudflarepayload.NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func (blockingProductionTransport) Deploy(ctx context.Context, _ []byte, _ opscl
 func productionClientRequest(t *testing.T, timeout time.Duration) opscloudflarepayload.Request {
 	t.Helper()
 	payload := contractTestPayload(t)
-	request, err := opscloudflarepayload.NewRequest("account", "worker", payload.SHA256, payload, timeout)
+	request, err := opscloudflarepayload.NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, timeout)
 	if err != nil {
 		t.Fatal(err)
 	}

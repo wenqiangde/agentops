@@ -6,13 +6,14 @@ import (
 )
 
 const (
-	endpointDomainsRead      = "domains-read"
-	endpointSchedulesRead    = "schedules-read"
-	endpointAssetSession     = "asset-session"
-	endpointAssetUpload      = "asset-upload"
-	endpointVersionCreate    = "version-create"
-	endpointDeploymentCreate = "deployment-create"
-	endpointIdentityRead     = "identity-read"
+	endpointDomainsRead           = "domains-read"
+	endpointSchedulesRead         = "schedules-read"
+	endpointCurrentDeploymentRead = "current-deployment-read"
+	endpointAssetSession          = "asset-session"
+	endpointAssetUpload           = "asset-upload"
+	endpointVersionCreate         = "version-create"
+	endpointDeploymentCreate      = "deployment-create"
+	endpointIdentityRead          = "identity-read"
 )
 
 func EndpointSequence(request Request) ([]string, error) {
@@ -23,7 +24,10 @@ func EndpointSequence(request Request) ([]string, error) {
 	if json.Unmarshal(request.Payload.Metadata, &config) != nil || config.validate() != nil || !sdkProfileSupported(config, request.Payload) {
 		return nil, errors.New("Cloudflare endpoint sequence profile is invalid")
 	}
-	sequence := []string{endpointDomainsRead, endpointSchedulesRead}
+	if request.ExpectedDeploymentID == "" || len(request.ExpectedVersionIDs) == 0 {
+		return nil, errors.New("Cloudflare endpoint sequence deployment identity is invalid")
+	}
+	sequence := []string{endpointDomainsRead, endpointSchedulesRead, endpointCurrentDeploymentRead}
 	if len(request.Payload.Assets) > 0 {
 		sequence = append(sequence, endpointAssetSession, endpointAssetUpload)
 	}
@@ -31,7 +35,7 @@ func EndpointSequence(request Request) ([]string, error) {
 }
 
 func RollbackEndpointSequence(RollbackRequest) []string {
-	return []string{endpointDeploymentCreate, endpointIdentityRead}
+	return []string{endpointCurrentDeploymentRead, endpointDeploymentCreate, endpointIdentityRead}
 }
 
 func newRollbackEndpointSequenceGuard(request RollbackRequest) *endpointSequenceGuard {

@@ -111,7 +111,7 @@ func TestApplyRollbackPreservesUnknownRemoteStateFromWriterError(t *testing.T) {
 func rollbackProductionIdentity() opscloudflare.ProductionConfirmationIdentity {
 	return opscloudflare.ProductionConfirmationIdentity{
 		APIProfile: "wrangler-4.107-preveal-v1", ClientVersion: "cloudflare-go/v7.7.0",
-		EndpointSequence: []string{"deployment-create", "identity-read"}, TokenProviderIdentity: "environment",
+		EndpointSequence: []string{"current-deployment-read", "deployment-create", "identity-read"}, TokenProviderIdentity: "environment",
 	}
 }
 

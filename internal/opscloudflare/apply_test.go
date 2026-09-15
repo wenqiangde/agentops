@@ -97,7 +97,7 @@ func TestApplyPreservesUnknownRemoteStateFromWriterError(t *testing.T) {
 func deployProductionIdentity() opscloudflare.ProductionConfirmationIdentity {
 	return opscloudflare.ProductionConfirmationIdentity{
 		APIProfile: "wrangler-4.107-preveal-v1", ClientVersion: "cloudflare-go/v7.7.0",
-		EndpointSequence: []string{"domains-read", "schedules-read", "version-create", "deployment-create", "identity-read"}, TokenProviderIdentity: "environment",
+		EndpointSequence: []string{"domains-read", "schedules-read", "current-deployment-read", "version-create", "deployment-create", "identity-read"}, TokenProviderIdentity: "environment",
 	}
 }
 
@@ -121,7 +121,7 @@ func deployPayloadRequest(t *testing.T) opscloudflarepayload.Request {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := opscloudflarepayload.NewRequest("0123456789abcdef0123456789abcdef", "example-worker", payload.SHA256, payload, 5*time.Second)
+	request, err := opscloudflarepayload.NewRequest("0123456789abcdef0123456789abcdef", "example-worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,5 +129,5 @@ func deployPayloadRequest(t *testing.T) opscloudflarepayload.Request {
 }
 
 func deployConfirmedPlan(payloadDigest string) opscloudflare.CloudflareDeployPlan {
-	return opscloudflare.CloudflareDeployPlan{Service: "example-relay", Environment: "production", RequestedVersion: "2026.09.14-1", Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef", WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.35.0", BaseCommit: strings.Repeat("2", 40), ScopeState: "clean", ScopeContentSHA256: strings.Repeat("3", 64), DeploymentInputSHA256: payloadDigest, DryRunVerified: true, SourcePath: "/tmp/example-relay", Timeout: 5 * time.Second}
+	return opscloudflare.CloudflareDeployPlan{Service: "example-relay", Environment: "production", RequestedVersion: "2026.09.14-1", Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef", WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.35.0", BaseCommit: strings.Repeat("2", 40), ScopeState: "clean", ScopeContentSHA256: strings.Repeat("3", 64), DeploymentInputSHA256: payloadDigest, CurrentDeploymentID: "11111111-1111-4111-8111-111111111111", CurrentVersionIDs: []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, DryRunVerified: true, SourcePath: "/tmp/example-relay", Timeout: 5 * time.Second}
 }

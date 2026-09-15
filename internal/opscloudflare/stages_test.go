@@ -157,6 +157,7 @@ func TestCloudflareSlowExecutorClassifiesEachTimedOutStage(t *testing.T) {
 			responses: []timedStageResponse{
 				{result: opsexec.Result{ExitCode: 0, Stdout: "4.35.0\n"}},
 				{result: opsexec.Result{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`}},
+				{result: opsexec.Result{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`}},
 				{delay: 100 * time.Millisecond},
 			},
 			wantStage: opscloudflare.StageDryRun, wantCode: opscloudflare.CodeDryRunFailed,
@@ -195,6 +196,7 @@ func TestCloudflareStagesReceiveIndependentTimeoutBudgets(t *testing.T) {
 	executor := &timedStageExecutor{responses: []timedStageResponse{
 		{delay: 80 * time.Millisecond, result: opsexec.Result{ExitCode: 0, Stdout: "4.35.0\n"}},
 		{delay: 80 * time.Millisecond, result: opsexec.Result{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`}},
+		{delay: 80 * time.Millisecond, result: opsexec.Result{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`}},
 		{delay: 80 * time.Millisecond, result: opsexec.Result{ExitCode: 0}},
 	}}
 	started := time.Now()

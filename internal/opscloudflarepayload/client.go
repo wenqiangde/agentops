@@ -10,11 +10,13 @@ import (
 const maxProductionTokenBytes = 64 * 1024
 
 type Request struct {
-	AccountID      string
-	Worker         string
-	ExpectedSHA256 string
-	Payload        Payload
-	Timeout        time.Duration
+	AccountID            string
+	Worker               string
+	ExpectedDeploymentID string
+	ExpectedVersionIDs   []string
+	ExpectedSHA256       string
+	Payload              Payload
+	Timeout              time.Duration
 }
 
 type Evidence struct {
@@ -72,7 +74,7 @@ func (c *Client) Deploy(ctx context.Context, request Request) (Evidence, error) 
 	if err := ctx.Err(); err != nil {
 		return Evidence{}, err
 	}
-	if request.Timeout <= 0 || request.ExpectedSHA256 == "" || !payloadDigestMatches(request.Payload, request.ExpectedSHA256) {
+	if request.Timeout <= 0 || request.ExpectedDeploymentID == "" || len(request.ExpectedVersionIDs) == 0 || request.ExpectedSHA256 == "" || !payloadDigestMatches(request.Payload, request.ExpectedSHA256) {
 		return Evidence{}, errors.New("Cloudflare client request is invalid")
 	}
 	requestContext, cancel := context.WithTimeout(ctx, request.Timeout)
@@ -156,21 +158,27 @@ func clearBytes(value []byte) {
 	}
 }
 
-func NewRequest(accountID, worker, expectedSHA256 string, payload Payload, timeout time.Duration) (Request, error) {
-	if accountID == "" || worker == "" || expectedSHA256 == "" || timeout <= 0 || !payloadDigestMatches(payload, expectedSHA256) {
+func NewRequest(accountID, worker, expectedDeploymentID string, expectedVersionIDs []string, expectedSHA256 string, payload Payload, timeout time.Duration) (Request, error) {
+	if accountID == "" || worker == "" || expectedDeploymentID == "" || len(expectedVersionIDs) == 0 || expectedSHA256 == "" || timeout <= 0 || !payloadDigestMatches(payload, expectedSHA256) {
 		return Request{}, errors.New("Cloudflare client request is invalid")
 	}
 	return Request{
-		AccountID:      accountID,
-		Worker:         worker,
-		ExpectedSHA256: expectedSHA256,
-		Payload:        payload.clone(),
-		Timeout:        timeout,
+		AccountID:            accountID,
+		Worker:               worker,
+		ExpectedDeploymentID: expectedDeploymentID,
+		ExpectedVersionIDs:   append([]string(nil), expectedVersionIDs...),
+		ExpectedSHA256:       expectedSHA256,
+		Payload:              payload.clone(),
+		Timeout:              timeout,
 	}, nil
 }
 
 func OwnRequest(request Request) (Request, error) {
-	return NewRequest(request.AccountID, request.Worker, request.ExpectedSHA256, request.Payload, request.Timeout)
+	owned, err := NewRequest(request.AccountID, request.Worker, request.ExpectedDeploymentID, request.ExpectedVersionIDs, request.ExpectedSHA256, request.Payload, request.Timeout)
+	if err != nil {
+		return Request{}, errors.New("Cloudflare client request is invalid")
+	}
+	return owned, nil
 }
 
 func OwnRollbackRequest(request RollbackRequest) (RollbackRequest, error) {

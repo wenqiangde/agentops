@@ -26,6 +26,7 @@ func TestOpsDeployRoutesCloudflareWorkerToReadOnlyPreview(t *testing.T) {
 	fake := &cliCloudflareExecutor{results: []opsexec.Result{
 		{ExitCode: 0, Stdout: "4.35.0\n"},
 		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`},
+		{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`},
 		{ExitCode: 0, Stdout: "private dry-run output"},
 	}}
 	original := opsCloudflareExecutor
@@ -53,6 +54,7 @@ func TestOpsDeployRoutesCloudflareWorkerToReadOnlyPreview(t *testing.T) {
 	wantArgs := [][]string{
 		{"--version"},
 		{"whoami", "--account", "0123456789abcdef0123456789abcdef", "--json"},
+		{"deployments", "status", "--json", "--config", "wrangler.jsonc"},
 		{"deploy", "--dry-run", "--config", "wrangler.jsonc"},
 	}
 	if len(fake.requests) != len(wantArgs) {
@@ -73,6 +75,7 @@ func TestOpsDeployDryRunFailureReportsSafeStageDiagnostics(t *testing.T) {
 	fake := &cliCloudflareExecutor{results: []opsexec.Result{
 		{ExitCode: 0, Stdout: "4.35.0\n", Duration: 5 * time.Millisecond},
 		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`, Duration: 7 * time.Millisecond},
+		{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`},
 		{ExitCode: 1, Stdout: "private source output", Stderr: "token=private-token account=0123456789abcdef0123456789abcdef", Duration: 125 * time.Millisecond},
 	}}
 	previous := opsCloudflareExecutor
@@ -116,7 +119,7 @@ func TestOpsDeployPreviewReportsSuccessfulStageTimings(t *testing.T) {
 	fake := successfulCLICloudflareExecutor()
 	fake.results[0].Duration = 5 * time.Millisecond
 	fake.results[1].Duration = 7 * time.Millisecond
-	fake.results[2].Duration = 11 * time.Millisecond
+	fake.results[3].Duration = 11 * time.Millisecond
 	previous := opsCloudflareExecutor
 	opsCloudflareExecutor = func() opsexec.Executor { return fake }
 	t.Cleanup(func() { opsCloudflareExecutor = previous })
@@ -164,7 +167,7 @@ func TestOpsDeployPreviewUsesRepositoryScopeSnapshotForSiblingAssets(t *testing.
 	if code != 0 || stderr.Len() != 0 {
 		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
 	}
-	if len(fake.requests) != 3 {
+	if len(fake.requests) != 4 {
 		t.Fatalf("requests=%+v", fake.requests)
 	}
 	snapshotSource := fake.requests[0].Directory
@@ -330,6 +333,7 @@ func successfulCLICloudflareExecutor() *cliCloudflareExecutor {
 	return &cliCloudflareExecutor{results: []opsexec.Result{
 		{ExitCode: 0, Stdout: "4.35.0\n"},
 		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`},
+		{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`},
 		{ExitCode: 0, Stdout: "dry-run"},
 	}}
 }

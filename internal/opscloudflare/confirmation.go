@@ -44,7 +44,7 @@ func ProductionCanonicalJSON(plan CloudflareDeployPlan, request opscloudflarepay
 		return nil, errors.New("Cloudflare production plan is invalid")
 	}
 	payloadDigest, err := opscloudflarepayload.CanonicalDigest(request.Payload)
-	if err != nil || request.ExpectedSHA256 != payloadDigest || request.AccountID != plan.AccountID || request.Worker != plan.Worker || plan.DeploymentInputSHA256 != payloadDigest {
+	if err != nil || request.ExpectedSHA256 != payloadDigest || request.AccountID != plan.AccountID || request.Worker != plan.Worker || request.ExpectedDeploymentID != plan.CurrentDeploymentID || !equalStringSet(request.ExpectedVersionIDs, plan.CurrentVersionIDs) || plan.DeploymentInputSHA256 != payloadDigest {
 		return nil, errors.New("Cloudflare production payload is invalid")
 	}
 	var metadataIdentity struct {
@@ -70,6 +70,23 @@ func ProductionCanonicalJSON(plan CloudflareDeployPlan, request opscloudflarepay
 		EndpointSequence: append([]string(nil), identity.EndpointSequence...), TokenProviderIdentity: identity.TokenProviderIdentity,
 	}
 	return json.Marshal(material)
+}
+
+func equalStringSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	want := make(map[string]int, len(left))
+	for _, value := range left {
+		want[value]++
+	}
+	for _, value := range right {
+		want[value]--
+		if want[value] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func ProductionDigest(plan CloudflareDeployPlan, request opscloudflarepayload.Request, identity ProductionConfirmationIdentity) (string, error) {

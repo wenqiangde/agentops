@@ -35,7 +35,7 @@ func NewCloudflareClient(tokenProvider TokenProvider) (*Client, error) {
 }
 
 func (s sdkProductionTransport) Deploy(ctx context.Context, token []byte, request Request) (Evidence, error) {
-	if ctx == nil || len(token) == 0 || !payloadDigestMatches(request.Payload, request.ExpectedSHA256) {
+	if ctx == nil || len(token) == 0 || request.ExpectedDeploymentID == "" || len(request.ExpectedVersionIDs) == 0 || !payloadDigestMatches(request.Payload, request.ExpectedSHA256) {
 		return Evidence{}, errors.New("Cloudflare SDK production request is invalid")
 	}
 	var config CanonicalConfig
@@ -59,6 +59,9 @@ func (s sdkProductionTransport) Deploy(ctx context.Context, token []byte, reques
 	started := time.Now().UTC()
 	evidence := Evidence{ClientVersion: cloudflareSDKVersion, InputSHA256: request.ExpectedSHA256, StartedAt: started}
 	if err := verifyEndpointsReadOnly(ctx, service, request, config, sequence); err != nil {
+		return evidence, err
+	}
+	if err := verifyCurrentDeployment(ctx, service, request.AccountID, request.Worker, request.ExpectedDeploymentID, request.ExpectedVersionIDs, sequence); err != nil {
 		return evidence, err
 	}
 	var versionID string
@@ -155,6 +158,9 @@ func (s sdkProductionTransport) Rollback(ctx context.Context, token []byte, requ
 		ClientVersion: cloudflareSDKVersion, VersionIDs: []string{request.TargetVersionID},
 		InputSHA256: request.ExpectedSHA256, StartedAt: started,
 	}
+	if err := verifyCurrentDeployment(ctx, service, request.AccountID, request.Worker, request.PreviousDeploymentID, nil, sequence); err != nil {
+		return evidence, err
+	}
 	if err := sequence.consume(endpointDeploymentCreate); err != nil {
 		return Evidence{}, err
 	}
@@ -179,6 +185,34 @@ func (s sdkProductionTransport) Rollback(ctx context.Context, token []byte, requ
 	}
 	evidence.RequestID = current.ID
 	return finishEvidence(evidence), nil
+}
+
+func verifyCurrentDeployment(ctx context.Context, service *workers.WorkerService, accountID, worker, expectedID string, expectedVersionIDs []string, sequence *endpointSequenceGuard) error {
+	if err := sequence.consume(endpointCurrentDeploymentRead); err != nil {
+		return err
+	}
+	deployments, err := service.Scripts.Deployments.List(ctx, worker, workers.ScriptDeploymentListParams{AccountID: cloudflare.F(accountID)})
+	if err != nil || deployments == nil || len(deployments.Deployments) == 0 || deployments.Deployments[0].ID != expectedID || (len(expectedVersionIDs) > 0 && !sameDeploymentVersions(expectedVersionIDs, deployments.Deployments[0].Versions)) {
+		return errors.New("Cloudflare SDK current deployment verification failed")
+	}
+	return nil
+}
+
+func sameDeploymentVersions(expected []string, actual []workers.DeploymentVersion) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	want := make(map[string]int, len(expected))
+	for _, versionID := range expected {
+		want[versionID]++
+	}
+	for _, version := range actual {
+		want[version.VersionID]--
+		if want[version.VersionID] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func verifyEndpointsReadOnly(ctx context.Context, service *workers.WorkerService, request Request, config CanonicalConfig, sequence *endpointSequenceGuard) error {

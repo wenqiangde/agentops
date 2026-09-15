@@ -11,7 +11,7 @@ import (
 
 func TestClientRequestUsesOwnedPayloadAndExpectedDigest(t *testing.T) {
 	payload := contractTestPayload(t)
-	request, err := opscloudflarepayload.NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := opscloudflarepayload.NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,14 +35,14 @@ func TestClientRequestUsesOwnedPayloadAndExpectedDigest(t *testing.T) {
 
 func TestClientRequestRejectsDigestMismatch(t *testing.T) {
 	payload := contractTestPayload(t)
-	if _, err := opscloudflarepayload.NewRequest("account", "worker", "wrong", payload, time.Second); err == nil {
+	if _, err := opscloudflarepayload.NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, "wrong", payload, time.Second); err == nil {
 		t.Fatal("mismatched expected digest was accepted")
 	}
 }
 
 func TestClientRequestRejectsPayloadMutationAfterConstruction(t *testing.T) {
 	payload := contractTestPayload(t)
-	request, err := opscloudflarepayload.NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := opscloudflarepayload.NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestClientRequestRejectsPayloadMutationAfterConstruction(t *testing.T) {
 
 func TestClientRequestTimesOutTrustedTransport(t *testing.T) {
 	payload := contractTestPayload(t)
-	request, err := opscloudflarepayload.NewRequest("account", "worker", payload.SHA256, payload, 10*time.Millisecond)
+	request, err := opscloudflarepayload.NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, 10*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestClientRequestTimesOutTrustedTransport(t *testing.T) {
 
 func TestClientRequestPropagatesCancellation(t *testing.T) {
 	payload := contractTestPayload(t)
-	request, err := opscloudflarepayload.NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := opscloudflarepayload.NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}

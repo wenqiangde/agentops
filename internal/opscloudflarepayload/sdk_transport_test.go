@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -23,7 +24,7 @@ func TestSDKProductionTransportUploadsRequestedAssetsBeforeVersion(t *testing.T)
 			t.Fatal(err)
 		}
 		response.Header().Set("Content-Type", "application/json")
-		switch len(paths) - 2 {
+		switch len(paths) - 3 {
 		case 1:
 			var envelope struct {
 				Manifest map[string]struct {
@@ -71,7 +72,7 @@ func TestSDKProductionTransportUploadsRequestedAssetsBeforeVersion(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,6 +82,7 @@ func TestSDKProductionTransportUploadsRequestedAssetsBeforeVersion(t *testing.T)
 	want := []string{
 		"GET /accounts/account/workers/domains?service=worker",
 		"GET /accounts/account/workers/scripts/worker/schedules",
+		"GET /accounts/account/workers/scripts/worker/deployments",
 		"POST /accounts/account/workers/scripts/worker/assets-upload-session",
 		"POST /accounts/account/workers/assets/upload?base64=true",
 		"POST /accounts/account/workers/workers/worker/versions?deploy=false",
@@ -109,7 +111,7 @@ func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		switch len(paths) - 2 {
+		switch len(paths) - 3 {
 		case 1:
 			if !strings.Contains(string(body), "approved module") || !strings.Contains(string(body), "worker.mjs") {
 				t.Fatalf("version upload missing owned module: %s", body)
@@ -140,7 +142,7 @@ func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,6 +153,7 @@ func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testin
 	wantPaths := []string{
 		"GET /accounts/account/workers/domains",
 		"GET /accounts/account/workers/scripts/worker/schedules",
+		"GET /accounts/account/workers/scripts/worker/deployments",
 		"POST /accounts/account/workers/scripts/worker/versions",
 		"POST /accounts/account/workers/scripts/worker/deployments",
 		"GET /accounts/account/workers/scripts/worker/deployments/22222222-2222-4222-8222-222222222222",
@@ -174,10 +177,12 @@ func TestSDKProductionTransportChecksEndpointsReadOnlyBeforeWriting(t *testing.T
 		case 2:
 			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"schedules":[{"cron":"*/30 * * * *"}]}}`))
 		case 3:
-			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"11111111-1111-4111-8111-111111111111","resources":{}}}`))
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]}}`))
 		case 4:
-			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","created_on":"2026-09-15T00:00:00Z","source":"api","strategy":"percentage","versions":[]}}`))
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"11111111-1111-4111-8111-111111111111","resources":{}}}`))
 		case 5:
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","created_on":"2026-09-15T00:00:00Z","source":"api","strategy":"percentage","versions":[]}}`))
+		case 6:
 			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","created_on":"2026-09-15T00:00:00Z","source":"api","strategy":"percentage","versions":[{"version_id":"11111111-1111-4111-8111-111111111111","percentage":100}]}}`))
 		default:
 			t.Fatalf("unexpected request %s", request.URL.RequestURI())
@@ -197,7 +202,7 @@ func TestSDKProductionTransportChecksEndpointsReadOnlyBeforeWriting(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,6 +212,7 @@ func TestSDKProductionTransportChecksEndpointsReadOnlyBeforeWriting(t *testing.T
 	want := []string{
 		"GET /accounts/account/workers/domains?service=worker",
 		"GET /accounts/account/workers/scripts/worker/schedules",
+		"GET /accounts/account/workers/scripts/worker/deployments",
 		"POST /accounts/account/workers/scripts/worker/versions",
 		"POST /accounts/account/workers/scripts/worker/deployments",
 		"GET /accounts/account/workers/scripts/worker/deployments/22222222-2222-4222-8222-222222222222",
@@ -230,7 +236,7 @@ func TestSDKProductionTransportRejectsEndpointDriftBeforeAnyWrite(t *testing.T) 
 		Routes: []RouteConfig{{Pattern: "admin.example.test", CustomDomain: true}},
 	}
 	payload := payloadForConfig(t, config, nil)
-	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +276,7 @@ func TestSDKProductionTransportRejectsUnmappedNoAssetConfigurationBeforeNetwork(
 			config := CanonicalConfig{Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
 			test.mutate(&config)
 			payload := payloadForConfig(t, config, nil)
-			request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+			request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -291,11 +297,11 @@ func TestEndpointSequenceIsProfileOwnedAndStrict(t *testing.T) {
 		Routes: []RouteConfig{{Pattern: "admin.example.test", CustomDomain: true}}, Crons: []string{"*/30 * * * *"},
 	}
 	payload := payloadForConfig(t, config, []Asset{{Path: "index.html", Bytes: []byte("approved")}})
-	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{endpointDomainsRead, endpointSchedulesRead, endpointAssetSession, endpointAssetUpload, endpointVersionCreate, endpointDeploymentCreate, endpointIdentityRead}
+	want := []string{endpointDomainsRead, endpointSchedulesRead, endpointCurrentDeploymentRead, endpointAssetSession, endpointAssetUpload, endpointVersionCreate, endpointDeploymentCreate, endpointIdentityRead}
 	got, err := EndpointSequence(request)
 	if err != nil || strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("sequence=%v err=%v", got, err)
@@ -328,14 +334,168 @@ func TestEndpointSequenceIsProfileOwnedAndStrict(t *testing.T) {
 func TestEndpointSequenceRequiresEmptyRemoteStateReads(t *testing.T) {
 	config := CanonicalConfig{Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
 	payload := payloadForConfig(t, config, nil)
-	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{endpointDomainsRead, endpointSchedulesRead, endpointVersionCreate, endpointDeploymentCreate, endpointIdentityRead}
+	want := []string{endpointDomainsRead, endpointSchedulesRead, endpointCurrentDeploymentRead, endpointVersionCreate, endpointDeploymentCreate, endpointIdentityRead}
 	got, err := EndpointSequence(request)
 	if err != nil || strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("empty endpoint policy sequence=%v want=%v err=%v", got, want, err)
+	}
+}
+
+func TestSDKProductionTransportRejectsChangedCurrentDeploymentBeforeAnyWrite(t *testing.T) {
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		methods = append(methods, request.Method)
+		response.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet && (strings.Contains(request.URL.Path, "/workers/domains") || strings.HasSuffix(request.URL.Path, "/schedules")) && writeEmptyEndpointRead(response, request) {
+			return
+		}
+		_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"22222222-2222-4222-8222-222222222222","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]}}`))
+	}))
+	defer server.Close()
+
+	config := CanonicalConfig{Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
+	payload := payloadForConfig(t, config, nil)
+	request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newSDKProductionTransport(server.URL+"/").Deploy(context.Background(), []byte("bounded-test-token"), request); err == nil {
+		t.Fatal("changed current deployment was accepted")
+	}
+	for _, method := range methods {
+		if method != http.MethodGet {
+			t.Fatalf("changed current deployment caused remote write: %v", methods)
+		}
+	}
+}
+
+func TestSDKProductionTransportRejectsChangedCurrentVersionSetBeforeAnyWrite(t *testing.T) {
+	var writes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			writes.Add(1)
+		}
+		if request.Method == http.MethodGet && (strings.Contains(request.URL.Path, "/workers/domains") || strings.HasSuffix(request.URL.Path, "/schedules")) && writeEmptyEndpointRead(response, request) {
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","percentage":100}]}]}}`))
+	}))
+	defer server.Close()
+
+	config := CanonicalConfig{Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
+	payload := payloadForConfig(t, config, nil)
+	request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newSDKProductionTransport(server.URL+"/").Deploy(context.Background(), []byte("bounded-test-token"), request); err == nil {
+		t.Fatal("changed current version set was accepted")
+	}
+	if writes.Load() != 0 {
+		t.Fatalf("changed current version set caused %d remote writes", writes.Load())
+	}
+}
+
+func TestSDKProductionTransportRollbackRejectsChangedCurrentDeploymentBeforeAnyWrite(t *testing.T) {
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		methods = append(methods, request.Method)
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"22222222-2222-4222-8222-222222222222","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]}}`))
+	}))
+	defer server.Close()
+
+	request, err := NewRollbackRequest("account", "worker", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "11111111-1111-4111-8111-111111111111", strings.Repeat("4", 64), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newSDKProductionTransport(server.URL+"/").Rollback(context.Background(), []byte("bounded-test-token"), request); err == nil {
+		t.Fatal("changed current rollback deployment was accepted")
+	}
+	for _, method := range methods {
+		if method != http.MethodGet {
+			t.Fatalf("changed current rollback deployment caused remote write: %v", methods)
+		}
+	}
+}
+
+func TestSDKProductionTransportRejectsUnreadableCurrentDeploymentBeforeAnyWrite(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		timeout time.Duration
+		write   func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "malformed", timeout: time.Second, write: func(response http.ResponseWriter, _ *http.Request) { _, _ = response.Write([]byte(`{`)) }},
+		{name: "timeout", timeout: 20 * time.Millisecond, write: func(_ http.ResponseWriter, request *http.Request) { <-request.Context().Done() }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var writes atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodGet {
+					writes.Add(1)
+				}
+				if request.Method == http.MethodGet && (strings.Contains(request.URL.Path, "/workers/domains") || strings.HasSuffix(request.URL.Path, "/schedules")) && writeEmptyEndpointRead(response, request) {
+					return
+				}
+				response.Header().Set("Content-Type", "application/json")
+				test.write(response, request)
+			}))
+			defer server.Close()
+			config := CanonicalConfig{Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
+			payload := payloadForConfig(t, config, nil)
+			request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, test.timeout)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), test.timeout)
+			defer cancel()
+			if _, err := newSDKProductionTransport(server.URL+"/").Deploy(ctx, []byte("bounded-test-token"), request); err == nil {
+				t.Fatal("unreadable current deployment was accepted")
+			}
+			if writes.Load() != 0 {
+				t.Fatalf("unreadable current deployment caused %d remote writes", writes.Load())
+			}
+		})
+	}
+}
+
+func TestSDKProductionTransportRollbackRejectsUnreadableCurrentDeploymentBeforeAnyWrite(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		timeout time.Duration
+		write   func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "malformed", timeout: time.Second, write: func(response http.ResponseWriter, _ *http.Request) { _, _ = response.Write([]byte(`{`)) }},
+		{name: "timeout", timeout: 20 * time.Millisecond, write: func(_ http.ResponseWriter, request *http.Request) { <-request.Context().Done() }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var writes atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodGet {
+					writes.Add(1)
+				}
+				response.Header().Set("Content-Type", "application/json")
+				test.write(response, request)
+			}))
+			defer server.Close()
+			request, err := NewRollbackRequest("account", "worker", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "11111111-1111-4111-8111-111111111111", strings.Repeat("4", 64), test.timeout)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), test.timeout)
+			defer cancel()
+			if _, err := newSDKProductionTransport(server.URL+"/").Rollback(ctx, []byte("bounded-test-token"), request); err == nil {
+				t.Fatal("unreadable current rollback deployment was accepted")
+			}
+			if writes.Load() != 0 {
+				t.Fatalf("unreadable current rollback deployment caused %d remote writes", writes.Load())
+			}
+		})
 	}
 }
 
@@ -349,7 +509,7 @@ func TestSDKProductionTransportRejectsUndeclaredRemoteEndpointBeforeAnyWrite(t *
 	defer server.Close()
 	config := CanonicalConfig{Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
 	payload := payloadForConfig(t, config, nil)
-	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,11 +551,13 @@ func TestSDKProductionTransportRollbackCreatesAndVerifiesExplicitVersionDeployme
 		response.Header().Set("Content-Type", "application/json")
 		switch len(paths) {
 		case 1:
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","percentage":100}]}]}}`))
+		case 2:
 			if !strings.Contains(string(body), "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") || !strings.Contains(string(body), "100") {
 				t.Fatalf("rollback deployment missing explicit target: %s", body)
 			}
 			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","created_on":"2026-09-15T00:00:00Z","source":"api","strategy":"percentage","versions":[]}}`))
-		case 2:
+		case 3:
 			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","created_on":"2026-09-15T00:00:00Z","source":"api","strategy":"percentage","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}}`))
 		default:
 			t.Fatalf("unexpected request %s", request.URL.RequestURI())
@@ -412,6 +574,7 @@ func TestSDKProductionTransportRollbackCreatesAndVerifiesExplicitVersionDeployme
 		t.Fatal(err)
 	}
 	want := []string{
+		"GET /accounts/account/workers/scripts/worker/deployments",
 		"POST /accounts/account/workers/scripts/worker/deployments",
 		"GET /accounts/account/workers/scripts/worker/deployments/22222222-2222-4222-8222-222222222222",
 	}
@@ -443,7 +606,7 @@ func TestSDKProductionTransportPreservesDeployIdentityOnReadbackFailure(t *testi
 	defer server.Close()
 	config := CanonicalConfig{Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
 	payload := payloadForConfig(t, config, nil)
-	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -466,14 +629,22 @@ func writeEmptyEndpointRead(response http.ResponseWriter, request *http.Request)
 		_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"schedules":[]}}`))
 		return true
 	}
+	if request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/deployments") {
+		_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]}}`))
+		return true
+	}
 	return false
 }
 
 func TestSDKProductionTransportPreservesRollbackIdentityOnReadbackFailure(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		calls++
 		response.Header().Set("Content-Type", "application/json")
+		if request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/deployments") {
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","percentage":100}]}]}}`))
+			return
+		}
+		calls++
 		if calls == 1 {
 			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"22222222-2222-4222-8222-222222222222","versions":[]}}`))
 			return

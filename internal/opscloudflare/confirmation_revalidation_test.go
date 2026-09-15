@@ -30,6 +30,16 @@ func TestApplyRevalidatesOwnedProductionConfirmationImmediatelyBeforeWrite(t *te
 	}
 }
 
+func TestConfirmProductionRejectsCurrentDeploymentDifferentFromPreview(t *testing.T) {
+	request := internalDeployRequest(t)
+	plan := internalDeployPlan(request.ExpectedSHA256)
+	plan.CurrentDeploymentID = "22222222-2222-4222-8222-222222222222"
+	identity := internalProductionIdentity()
+	if _, err := ProductionDigest(plan, request, identity); err == nil {
+		t.Fatal("production confirmation accepted a current deployment different from preview")
+	}
+}
+
 func TestApplyRollbackRevalidatesOwnedProductionConfirmationImmediatelyBeforeWrite(t *testing.T) {
 	plan := internalRollbackPlan()
 	request, err := opscloudflarepayload.NewRollbackRequest(plan.AccountID, plan.Worker, plan.TargetVersionID, plan.CurrentDeploymentID, plan.DeploymentInputSHA256, time.Second)
@@ -83,7 +93,7 @@ func internalDeployRequest(t *testing.T) opscloudflarepayload.Request {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request, err := opscloudflarepayload.NewRequest("0123456789abcdef0123456789abcdef", "example-worker", payload.SHA256, payload, time.Second)
+	request, err := opscloudflarepayload.NewRequest("0123456789abcdef0123456789abcdef", "example-worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +103,7 @@ func internalDeployRequest(t *testing.T) opscloudflarepayload.Request {
 func internalProductionIdentity() ProductionConfirmationIdentity {
 	return ProductionConfirmationIdentity{
 		APIProfile: "wrangler-4.107-preveal-v1", ClientVersion: "cloudflare-go/v7.7.0",
-		EndpointSequence: []string{"domains-read", "schedules-read", "version-create", "deployment-create", "identity-read"}, TokenProviderIdentity: "environment",
+		EndpointSequence: []string{"domains-read", "schedules-read", "current-deployment-read", "version-create", "deployment-create", "identity-read"}, TokenProviderIdentity: "environment",
 	}
 }
 
@@ -104,6 +114,7 @@ func internalDeployPlan(payloadDigest string) CloudflareDeployPlan {
 		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: "1111111111111111111111111111111111111111111111111111111111111111", WranglerVersion: "4.35.0",
 		BaseCommit: "2222222222222222222222222222222222222222", ScopeState: "clean", ScopeContentSHA256: "3333333333333333333333333333333333333333333333333333333333333333",
 		DeploymentInputSHA256: payloadDigest, DryRunVerified: true,
+		CurrentDeploymentID: "11111111-1111-4111-8111-111111111111", CurrentVersionIDs: []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
 	}
 }
 

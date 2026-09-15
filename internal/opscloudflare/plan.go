@@ -46,6 +46,8 @@ type CloudflareDeployPlan struct {
 	ScopeState            string         `json:"scope_state"`
 	ScopeContentSHA256    string         `json:"scope_content_sha256"`
 	DeploymentInputSHA256 string         `json:"deployment_input_sha256"`
+	CurrentDeploymentID   string         `json:"current_deployment_id"`
+	CurrentVersionIDs     []string       `json:"current_version_ids"`
 	ScopeEntries          []opsgit.Entry `json:"scope_entries,omitempty"`
 	RequireCommittedScope bool           `json:"require_committed_scope"`
 	DryRunVerified        bool           `json:"dry_run_verified"`
@@ -95,6 +97,12 @@ func CreatePlan(ctx context.Context, executor opsexec.Executor, request PlanRequ
 		plan.BlockReason = "deployment scope contains uncommitted changes"
 		return plan, nil
 	}
+	current, err := readCurrentDeployment(ctx, executor, request.Preflight.SourcePath, request.Preflight.WranglerConfig, request.Preflight.Timeout)
+	if err != nil {
+		return CloudflareDeployPlan{}, err
+	}
+	plan.CurrentDeploymentID = current.ID
+	plan.CurrentVersionIDs = deploymentVersionIDs(current)
 
 	_, dryRunStage, stageErr := runExternalStage(ctx, executor, opsexec.Request{
 		Program:   "node_modules/.bin/wrangler",
@@ -157,6 +165,8 @@ func CanonicalJSON(plan CloudflareDeployPlan) ([]byte, error) {
 	normalized.Timeout = 0
 	normalized.Diagnostics = nil
 	normalized.ScopeEntries = append([]opsgit.Entry(nil), plan.ScopeEntries...)
+	normalized.CurrentVersionIDs = append([]string(nil), plan.CurrentVersionIDs...)
+	sort.Strings(normalized.CurrentVersionIDs)
 	sort.Slice(normalized.ScopeEntries, func(i, j int) bool {
 		if normalized.ScopeEntries[i].Path != normalized.ScopeEntries[j].Path {
 			return normalized.ScopeEntries[i].Path < normalized.ScopeEntries[j].Path
