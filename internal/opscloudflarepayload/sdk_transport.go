@@ -189,23 +189,19 @@ func verifyEndpointsReadOnly(ctx context.Context, service *workers.WorkerService
 		}
 		desiredDomains[route.Pattern] = true
 	}
-	if len(config.Routes) > 0 {
-		if err := sequence.consume(endpointDomainsRead); err != nil {
-			return err
-		}
-		domains, err := service.Domains.List(ctx, workers.DomainListParams{AccountID: cloudflare.F(request.AccountID), Service: cloudflare.F(request.Worker)})
-		if err != nil || domains == nil || !sameDomains(desiredDomains, domains.Result, request.Worker) {
-			return errors.New("Cloudflare SDK domain verification failed")
-		}
+	if err := sequence.consume(endpointDomainsRead); err != nil {
+		return err
 	}
-	if len(config.Crons) > 0 {
-		if err := sequence.consume(endpointSchedulesRead); err != nil {
-			return err
-		}
-		actualSchedules, err := service.Scripts.Schedules.Get(ctx, request.Worker, workers.ScriptScheduleGetParams{AccountID: cloudflare.F(request.AccountID)})
-		if err != nil || actualSchedules == nil || !sameSchedules(config.Crons, actualSchedules.Schedules) {
-			return errors.New("Cloudflare SDK schedule verification failed")
-		}
+	domains, err := service.Domains.List(ctx, workers.DomainListParams{AccountID: cloudflare.F(request.AccountID), Service: cloudflare.F(request.Worker)})
+	if err != nil || domains == nil || !sameDomains(desiredDomains, domains.Result, request.Worker) {
+		return errors.New("Cloudflare SDK domain verification failed")
+	}
+	if err := sequence.consume(endpointSchedulesRead); err != nil {
+		return err
+	}
+	actualSchedules, err := service.Scripts.Schedules.Get(ctx, request.Worker, workers.ScriptScheduleGetParams{AccountID: cloudflare.F(request.AccountID)})
+	if err != nil || actualSchedules == nil || !sameSchedules(config.Crons, actualSchedules.Schedules) {
+		return errors.New("Cloudflare SDK schedule verification failed")
 	}
 	return nil
 }

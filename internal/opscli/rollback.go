@@ -208,7 +208,7 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 	result, err := opscloudflare.ApplyRollback(applyCtx, nil, opscloudflare.ConfirmedProductionRollbackPlan{})
 	if err != nil || !result.Success {
 		if result.ProductionWriteSucceeded {
-			if reportErr := writeCloudflareRollbackFailureReport(reportRoot, digest, plan, started, time.Now().UTC(), stdout); reportErr != nil {
+			if reportErr := writeCloudflareRollbackFailureReport(reportRoot, digest, plan, result, started, time.Now().UTC(), stdout); reportErr != nil {
 				fmt.Fprintln(stderr, "agentops: production state unknown; audit persistence failed")
 			}
 		}
@@ -239,22 +239,28 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 	return 0
 }
 
-func writeCloudflareRollbackFailureReport(reportRoot, digest string, plan opscloudflare.CloudflareRollbackPlan, started, finished time.Time, stdout io.Writer) error {
+func writeCloudflareRollbackFailureReport(reportRoot, digest string, plan opscloudflare.CloudflareRollbackPlan, result opscloudflare.RollbackResult, started, finished time.Time, stdout io.Writer) error {
 	operationID, err := newOpsOperationID("cloudflare-rollback")
 	if err != nil {
 		return err
 	}
-	previous := "multiple"
-	if len(plan.CurrentVersionIDs) == 1 {
-		previous = plan.CurrentVersionIDs[0]
+	stage, err := opscloudflare.NewStageResult(opscloudflare.StageIdentityVerification, "CF_ROLLBACK_IDENTITY_MISMATCH", finished.Sub(started), opscloudflare.TimeoutNone, opscloudflare.NewCorrelationID())
+	if err != nil {
+		return err
 	}
-	report := opsreport.Report{
-		OperationID: operationID, Actor: plan.AccountID, Service: plan.Service, Environment: plan.Environment, Host: plan.Worker,
-		PlanDigest: digest, PreviousVersion: previous, RequestedVersion: plan.TargetVersionID, ArtifactDigest: plan.ScopeContentSHA256,
-		Steps:    []opsreport.StepResult{{Order: 1, Kind: "cloudflare-rollback", Status: "failed", StartedAt: started, FinishedAt: finished, Error: "active deployment verification failed"}},
-		Health:   opsreport.HealthEvidence{Type: "http", State: "not-checked", Healthy: false},
-		Recovery: "manual-review-required", Terminal: true, StartedAt: started, FinishedAt: finished,
-		Error: "active deployment verification failed", ManualWork: "inspect Cloudflare deployment state before retrying",
+	versionIDs := []string(nil)
+	if result.VersionID != "" {
+		versionIDs = []string{result.VersionID}
+	}
+	report, err := opsreport.NewCloudflareReport(opsreport.CloudflareReportInput{
+		OperationID: operationID, Operation: "rollback", Actor: "environment", Service: plan.Service, Environment: plan.Environment, Worker: plan.Worker,
+		PlanDigest: digest, PayloadDigest: plan.DeploymentInputSHA256, RequestedVersion: plan.TargetVersionID,
+		PreviousDeploymentID: plan.CurrentDeploymentID, DeploymentID: result.DeploymentID, VersionIDs: versionIDs, Stages: []opscloudflare.StageResult{stage},
+		Outcome: opsreport.CloudflareUnknownState, Health: opsreport.HealthEvidence{Type: "http", State: "not-checked"}, ErrorCode: "CF_ROLLBACK_IDENTITY_MISMATCH",
+		StartedAt: started, FinishedAt: finished,
+	})
+	if err != nil {
+		return err
 	}
 	reportPath, err := writeCloudflareReport(reportRoot, report)
 	if err != nil {

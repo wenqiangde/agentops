@@ -327,9 +327,10 @@ adversarial review before the CLI gate can be removed.
 
 The endpoint sequence is derived from the canonical profile and owned payload;
 callers cannot supply an alternate, shorter, reordered, or additional sequence.
-Custom-domain and cron state is read and compared for exact equality before the
-first write. This profile never creates, updates, or deletes those endpoints.
-Any mismatch fails closed. Every successful version/deployment operation is
+Custom-domain and cron state is always read and compared for exact equality
+before the first write, including when the local declarations are empty. This
+profile never creates, updates, or deletes those endpoints. Any mismatch fails
+closed. Every successful version/deployment operation is
 followed by a deployment GET that must prove the expected single version at
 100 percent traffic. A no-assets Worker that includes bindings, variables, or
 migrations not representable by the selected typed SDK endpoint fails before
@@ -397,7 +398,9 @@ Repository cleanliness and frozen deployment input are separate concepts:
   is non-terminal `unknown-state` and requires remote inspection before retry.
   Transport evidence marks every operation after a potentially accepted remote
   write and preserves any known deployment/version IDs even when a later request
-  fails; client and apply layers must not erase that evidence.
+  fails; client and apply layers must not erase that evidence. CLI failure paths
+  persist those IDs through the typed Cloudflare `unknown-state` report schema,
+  rather than a generic terminal failure report.
   Health failure is recorded separately and requires an explicit rollback
   decision; it never triggers rollback automatically.
 - Cloudflare reports contain bounded stage evidence and durable deployment or

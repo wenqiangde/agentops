@@ -15,12 +15,15 @@ func TestSDKProductionTransportUploadsRequestedAssetsBeforeVersion(t *testing.T)
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		paths = append(paths, request.Method+" "+request.URL.RequestURI())
+		if writeEmptyEndpointRead(response, request) {
+			return
+		}
 		body, err := io.ReadAll(request.Body)
 		if err != nil {
 			t.Fatal(err)
 		}
 		response.Header().Set("Content-Type", "application/json")
-		switch len(paths) {
+		switch len(paths) - 2 {
 		case 1:
 			var envelope struct {
 				Manifest map[string]struct {
@@ -76,6 +79,8 @@ func TestSDKProductionTransportUploadsRequestedAssetsBeforeVersion(t *testing.T)
 		t.Fatal(err)
 	}
 	want := []string{
+		"GET /accounts/account/workers/domains?service=worker",
+		"GET /accounts/account/workers/scripts/worker/schedules",
 		"POST /accounts/account/workers/scripts/worker/assets-upload-session",
 		"POST /accounts/account/workers/assets/upload?base64=true",
 		"POST /accounts/account/workers/workers/worker/versions?deploy=false",
@@ -91,6 +96,9 @@ func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testin
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		paths = append(paths, request.Method+" "+request.URL.Path)
+		if writeEmptyEndpointRead(response, request) {
+			return
+		}
 		if request.Header.Get("Authorization") != "Bearer bounded-test-token" {
 			t.Fatalf("unexpected authorization header")
 		}
@@ -101,7 +109,7 @@ func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testin
 		if err != nil {
 			t.Fatal(err)
 		}
-		switch len(paths) {
+		switch len(paths) - 2 {
 		case 1:
 			if !strings.Contains(string(body), "approved module") || !strings.Contains(string(body), "worker.mjs") {
 				t.Fatalf("version upload missing owned module: %s", body)
@@ -141,6 +149,8 @@ func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testin
 		t.Fatal(err)
 	}
 	wantPaths := []string{
+		"GET /accounts/account/workers/domains",
+		"GET /accounts/account/workers/scripts/worker/schedules",
 		"POST /accounts/account/workers/scripts/worker/versions",
 		"POST /accounts/account/workers/scripts/worker/deployments",
 		"GET /accounts/account/workers/scripts/worker/deployments/22222222-2222-4222-8222-222222222222",
@@ -315,6 +325,45 @@ func TestEndpointSequenceIsProfileOwnedAndStrict(t *testing.T) {
 	}
 }
 
+func TestEndpointSequenceRequiresEmptyRemoteStateReads(t *testing.T) {
+	config := CanonicalConfig{Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
+	payload := payloadForConfig(t, config, nil)
+	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{endpointDomainsRead, endpointSchedulesRead, endpointVersionCreate, endpointDeploymentCreate, endpointIdentityRead}
+	got, err := EndpointSequence(request)
+	if err != nil || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("empty endpoint policy sequence=%v want=%v err=%v", got, want, err)
+	}
+}
+
+func TestSDKProductionTransportRejectsUndeclaredRemoteEndpointBeforeAnyWrite(t *testing.T) {
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		methods = append(methods, request.Method)
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[{"id":"domain","hostname":"unexpected.example.test","service":"worker","environment":"production"}]}`))
+	}))
+	defer server.Close()
+	config := CanonicalConfig{Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
+	payload := payloadForConfig(t, config, nil)
+	request, err := NewRequest("account", "worker", payload.SHA256, payload, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := newSDKProductionTransport(server.URL+"/").Deploy(context.Background(), []byte("bounded-test-token"), request)
+	if err == nil || evidence.RemoteWritePossible {
+		t.Fatalf("undeclared remote endpoint was accepted: evidence=%#v err=%v", evidence, err)
+	}
+	for _, method := range methods {
+		if method != http.MethodGet {
+			t.Fatalf("undeclared endpoint caused remote write: %v", methods)
+		}
+	}
+}
+
 func payloadForConfig(t *testing.T, config CanonicalConfig, assets []Asset) Payload {
 	t.Helper()
 	metadata, err := config.Metadata()
@@ -377,6 +426,9 @@ func TestSDKProductionTransportRollbackCreatesAndVerifiesExplicitVersionDeployme
 func TestSDKProductionTransportPreservesDeployIdentityOnReadbackFailure(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if writeEmptyEndpointRead(response, request) {
+			return
+		}
 		calls++
 		response.Header().Set("Content-Type", "application/json")
 		switch calls {
@@ -402,6 +454,19 @@ func TestSDKProductionTransportPreservesDeployIdentityOnReadbackFailure(t *testi
 	if !evidence.RemoteWritePossible || evidence.RequestID != "22222222-2222-4222-8222-222222222222" || len(evidence.VersionIDs) != 1 || evidence.VersionIDs[0] != "11111111-1111-4111-8111-111111111111" {
 		t.Fatalf("deploy unknown-state evidence was lost: %#v", evidence)
 	}
+}
+
+func writeEmptyEndpointRead(response http.ResponseWriter, request *http.Request) bool {
+	response.Header().Set("Content-Type", "application/json")
+	if request.Method == http.MethodGet && strings.Contains(request.URL.Path, "/workers/domains") {
+		_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[]}`))
+		return true
+	}
+	if request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/schedules") {
+		_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"schedules":[]}}`))
+		return true
+	}
+	return false
 }
 
 func TestSDKProductionTransportPreservesRollbackIdentityOnReadbackFailure(t *testing.T) {

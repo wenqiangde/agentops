@@ -393,6 +393,36 @@ func TestOpsDeployRejectsSnapshotDriftAfterConfirmationDryRun(t *testing.T) {
 	}
 }
 
+func TestCloudflareApplyFailureReportPersistsTypedUnknownStateIdentity(t *testing.T) {
+	root := t.TempDir()
+	plan := opscloudflare.CloudflareDeployPlan{
+		Service: "example-relay", Environment: "production", Worker: "example-worker", RequestedVersion: "2026.09.15-1",
+		DeploymentInputSHA256: strings.Repeat("b", 64),
+	}
+	result := opscloudflare.ApplyResult{
+		ProductionWriteSucceeded: true,
+		DeploymentID:             "22222222-2222-4222-8222-222222222222",
+		VersionIDs:               []string{"11111111-1111-4111-8111-111111111111"},
+	}
+	var output bytes.Buffer
+	started := time.Date(2026, 9, 15, 1, 2, 3, 0, time.UTC)
+	if err := writeCloudflareApplyFailureReport(root, "cloudflare-deploy", strings.Repeat("a", 64), plan, result, started, started.Add(time.Second), &output); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("reports=%v err=%v", entries, err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report opsreport.Report
+	if json.Unmarshal(data, &report) != nil || report.Cloudflare == nil || report.Cloudflare.Outcome != opsreport.CloudflareUnknownState || report.Terminal || report.Cloudflare.DeploymentID != result.DeploymentID || len(report.Cloudflare.VersionIDs) != 1 || report.Cloudflare.VersionIDs[0] != result.VersionIDs[0] {
+		t.Fatalf("typed unknown-state identity missing: %s", data)
+	}
+}
+
 func TestCloudflareEmergencyReportIgnoresPreexistingSymlinkDirectory(t *testing.T) {
 	root := t.TempDir()
 	primary := filepath.Join(root, "reports")

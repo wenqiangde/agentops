@@ -93,7 +93,7 @@ func internalDeployRequest(t *testing.T) opscloudflarepayload.Request {
 func internalProductionIdentity() ProductionConfirmationIdentity {
 	return ProductionConfirmationIdentity{
 		APIProfile: "wrangler-4.107-preveal-v1", ClientVersion: "cloudflare-go/v7.7.0",
-		EndpointSequence: []string{"version-create", "deployment-create", "identity-read"}, TokenProviderIdentity: "environment",
+		EndpointSequence: []string{"domains-read", "schedules-read", "version-create", "deployment-create", "identity-read"}, TokenProviderIdentity: "environment",
 	}
 }
 

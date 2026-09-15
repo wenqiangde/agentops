@@ -117,7 +117,7 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 		result, err := opscloudflare.Apply(applyCtx, nil, opscloudflare.ConfirmedProductionPlan{})
 		if err != nil || !result.Success {
 			if result.ProductionWriteSucceeded {
-				if reportErr := writeCloudflareApplyFailureReport(reportRoot, "cloudflare-deploy", digest, plan, started, time.Now().UTC(), stdout); reportErr != nil {
+				if reportErr := writeCloudflareApplyFailureReport(reportRoot, "cloudflare-deploy", digest, plan, result, started, time.Now().UTC(), stdout); reportErr != nil {
 					fmt.Fprintln(stderr, "agentops: production state unknown; audit persistence failed")
 				}
 			}
@@ -179,18 +179,24 @@ func revalidateCloudflareGitEvidence(ctx context.Context, service opsconfig.Serv
 	return nil
 }
 
-func writeCloudflareApplyFailureReport(reportRoot, operationKind, digest string, plan opscloudflare.CloudflareDeployPlan, started, finished time.Time, stdout io.Writer) error {
+func writeCloudflareApplyFailureReport(reportRoot, operationKind, digest string, plan opscloudflare.CloudflareDeployPlan, result opscloudflare.ApplyResult, started, finished time.Time, stdout io.Writer) error {
 	operationID, err := newOpsOperationID(operationKind)
 	if err != nil {
 		return err
 	}
-	report := opsreport.Report{
-		OperationID: operationID, Actor: plan.AccountID, Service: plan.Service, Environment: plan.Environment, Host: plan.Worker,
-		PlanDigest: digest, RequestedVersion: plan.RequestedVersion, ArtifactDigest: plan.ScopeContentSHA256,
-		Steps:    []opsreport.StepResult{{Order: 1, Kind: "cloudflare-deploy", Status: "failed", StartedAt: started, FinishedAt: finished, Error: "post-deploy identity verification failed"}},
-		Health:   opsreport.HealthEvidence{Type: "http", State: "not-checked", Healthy: false},
-		Recovery: "manual-review-required", Terminal: true, StartedAt: started, FinishedAt: finished,
-		Error: "post-deploy identity verification failed", ManualWork: "inspect Cloudflare deployment state before retrying",
+	stage, err := opscloudflare.NewStageResult(opscloudflare.StageIdentityVerification, "CF_IDENTITY_UNAVAILABLE", finished.Sub(started), opscloudflare.TimeoutNone, opscloudflare.NewCorrelationID())
+	if err != nil {
+		return err
+	}
+	report, err := opsreport.NewCloudflareReport(opsreport.CloudflareReportInput{
+		OperationID: operationID, Operation: "deploy", Actor: "environment", Service: plan.Service, Environment: plan.Environment, Worker: plan.Worker,
+		PlanDigest: digest, PayloadDigest: plan.DeploymentInputSHA256, RequestedVersion: plan.RequestedVersion,
+		DeploymentID: result.DeploymentID, VersionIDs: append([]string(nil), result.VersionIDs...), Stages: []opscloudflare.StageResult{stage},
+		Outcome: opsreport.CloudflareUnknownState, Health: opsreport.HealthEvidence{Type: "http", State: "not-checked"}, ErrorCode: "CF_IDENTITY_UNAVAILABLE",
+		StartedAt: started, FinishedAt: finished,
+	})
+	if err != nil {
+		return err
 	}
 	reportPath, err := writeCloudflareReport(reportRoot, report)
 	if err != nil {

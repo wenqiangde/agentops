@@ -23,13 +23,7 @@ func EndpointSequence(request Request) ([]string, error) {
 	if json.Unmarshal(request.Payload.Metadata, &config) != nil || config.validate() != nil || !sdkProfileSupported(config, request.Payload) {
 		return nil, errors.New("Cloudflare endpoint sequence profile is invalid")
 	}
-	sequence := make([]string, 0, 7)
-	if len(config.Routes) > 0 {
-		sequence = append(sequence, endpointDomainsRead)
-	}
-	if len(config.Crons) > 0 {
-		sequence = append(sequence, endpointSchedulesRead)
-	}
+	sequence := []string{endpointDomainsRead, endpointSchedulesRead}
 	if len(request.Payload.Assets) > 0 {
 		sequence = append(sequence, endpointAssetSession, endpointAssetUpload)
 	}
