@@ -181,6 +181,10 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 	if !confirm {
 		return 0
 	}
+	if !cloudflareProductionWritesEnabled {
+		fmt.Fprintln(stderr, cloudflareProductionWritesDisabledMessage)
+		return 1
+	}
 	confirmed, err := opscloudflare.ConfirmRollbackPlan(plan, previewDigest)
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest is stale")

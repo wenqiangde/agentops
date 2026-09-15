@@ -65,6 +65,33 @@ func TestOpsDeployRoutesCloudflareWorkerToReadOnlyPreview(t *testing.T) {
 	}
 }
 
+func TestOpsDeployRejectsCloudflareProductionWriteWhileSecurityGateIsClosed(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+	args := []string{"ops", "deploy", "example-relay", "--environment", "production", "--version", "2026.09.14-1"}
+
+	previewExecutor := successfulCLICloudflareExecutor()
+	original := opsCloudflareExecutor
+	opsCloudflareExecutor = func() opsexec.Executor { return previewExecutor }
+	t.Cleanup(func() { opsCloudflareExecutor = original })
+	var preview, previewErr bytes.Buffer
+	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
+		t.Fatalf("preview code=%d out=%q err=%q", code, preview.String(), previewErr.String())
+	}
+
+	confirmedExecutor := successfulCLICloudflareExecutor()
+	opsCloudflareExecutor = func() opsexec.Executor { return confirmedExecutor }
+	var stdout, stderr bytes.Buffer
+	confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
+	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "production writes are temporarily disabled") {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
+	}
+	if hasCloudflareProductionDeploy(confirmedExecutor.requests) {
+		t.Fatalf("security gate allowed production deploy: %+v", confirmedExecutor.requests)
+	}
+}
+
 func TestOpsDeployRequiresConfirmAndExactDigestBeforeCloudflareProductionCommand(t *testing.T) {
 	p := opsTestPaths(t, "valid")
 	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
@@ -169,6 +196,10 @@ func TestOpsDeployWritesBoundedFailureReportWhenCloudflareHTTPHealthFails(t *tes
 }
 
 func TestOpsDeployRejectsCloudflareInputDriftBeforeProductionCommand(t *testing.T) {
+	previousWritesEnabled := cloudflareProductionWritesEnabled
+	cloudflareProductionWritesEnabled = true
+	t.Cleanup(func() { cloudflareProductionWritesEnabled = previousWritesEnabled })
+
 	tests := []struct {
 		name          string
 		mutate        func(*testing.T, string)
@@ -463,8 +494,13 @@ func TestOpsDeployWarnsWhenPrimaryAndEmergencyReportsAreUnavailable(t *testing.T
 func stubCLICloudflareExecutor(t *testing.T, executor opsexec.Executor) {
 	t.Helper()
 	previous := opsCloudflareExecutor
+	previousWritesEnabled := cloudflareProductionWritesEnabled
 	opsCloudflareExecutor = func() opsexec.Executor { return executor }
-	t.Cleanup(func() { opsCloudflareExecutor = previous })
+	cloudflareProductionWritesEnabled = true
+	t.Cleanup(func() {
+		opsCloudflareExecutor = previous
+		cloudflareProductionWritesEnabled = previousWritesEnabled
+	})
 }
 
 func stubCLICloudflareHealth(t *testing.T, result opshealth.Result) {

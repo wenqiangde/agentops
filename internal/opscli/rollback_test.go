@@ -191,6 +191,34 @@ func TestOpsRollbackCloudflarePreviewConfirmHealthAndReport(t *testing.T) {
 	}
 }
 
+func TestOpsRollbackRejectsCloudflareProductionWriteWhileSecurityGateIsClosed(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+	target := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	args := []string{"ops", "rollback", "example-relay", "--environment", "production", "--version", target}
+
+	previewExecutor := successfulCLICloudflareRollbackExecutor(target)
+	original := opsCloudflareExecutor
+	opsCloudflareExecutor = func() opsexec.Executor { return previewExecutor }
+	t.Cleanup(func() { opsCloudflareExecutor = original })
+	var preview, previewErr bytes.Buffer
+	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
+		t.Fatalf("preview code=%d out=%q err=%q", code, preview.String(), previewErr.String())
+	}
+
+	confirmedExecutor := successfulCLICloudflareRollbackExecutor(target)
+	opsCloudflareExecutor = func() opsexec.Executor { return confirmedExecutor }
+	var stdout, stderr bytes.Buffer
+	confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
+	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "production writes are temporarily disabled") {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
+	}
+	if hasCloudflareRollback(confirmedExecutor.requests) {
+		t.Fatalf("security gate allowed production rollback: %+v", confirmedExecutor.requests)
+	}
+}
+
 func successfulCLICloudflareRollbackExecutor(target string) *cliCloudflareExecutor {
 	return &cliCloudflareExecutor{results: []opsexec.Result{
 		{ExitCode: 0, Stdout: "4.35.0\n"},

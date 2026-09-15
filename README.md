@@ -57,7 +57,9 @@ Source builds report the `source` channel. Release builds report the release
 tag, commit, build date, and `github-release` channel injected by CI.
 
 See [Service operations](docs/service-operations.md) for the configuration and
-command reference, including preview-gated Cloudflare deployment and rollback.
+command reference. Cloudflare validation and preview are available, while
+Cloudflare production deploy and rollback confirmation remain disabled pending
+completion of the elevated-risk execution-isolation review.
 See the
 [dependency adoption roadmap](docs/dependency-adoption-roadmap.md) for the
 approved dependency order and stage gates.

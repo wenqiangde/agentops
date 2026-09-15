@@ -280,32 +280,34 @@ node_modules/.bin/wrangler whoami --account <account-id> --json
 node_modules/.bin/wrangler deploy --dry-run --config <file>
 ```
 
-Generate and review a preview before every production write:
+Generate and review a preview:
 
 ```bash
 agentops deploy example-relay --environment production --version 2026.09.14-1
-agentops deploy example-relay --environment production --version 2026.09.14-1 \
-  --confirm --preview-digest <64-lowercase-hex>
 ```
 
-The preview and confirmed command each copy the complete Worker source into a
+Cloudflare production writes are temporarily disabled. A deploy or rollback
+invocation with `--confirm` exits nonzero after producing the current preview
+and digest, before any production Wrangler command. This gate is compiled into
+the CLI and cannot be enabled by service configuration or an environment
+variable. SSH deployment and rollback are unaffected.
+
+Reopening Cloudflare confirmation requires an isolated execution boundary that
+prevents the invoking user and concurrent project processes from changing
+approved inputs, constrains every Wrangler file and command input to that
+boundary, and persists audit evidence through descriptor-relative operations.
+That implementation must pass the elevated-risk independent review before the
+gate is removed.
+
+The preview copies the complete Worker source into a
 private controlled snapshot, including ignored build output and project-local
-dependencies. Dry-run, deploy or rollback, and post-operation identity reads
-all use that same snapshot. The confirmed command also repeats Git, Wrangler,
-account, and config checks and runs `wrangler deploy --config <file>` only when
-the snapshot digest and recomputed plan match the supplied digest. After the
-dry-run, AgentOps recomputes the snapshot digest and removes write permission
-before any production command. The resolved
+dependencies. The resolved
 `source.path` and nested config must remain inside their resolved roots. Internal
 npm links such as `node_modules/.bin/wrangler` are rewritten into the snapshot;
 links resolving outside the source are rejected. Wrangler `main`, assets/site
 directories, and build working directories must be clean relative paths inside
-the snapshot. Success additionally requires one new
-machine-readable deployment UUID, valid version UUID evidence, configured HTTP
-health, and a mode-`0600` report. Raw Wrangler output is not report content.
-AgentOps compares machine-readable output from
-`wrangler deployments list --json --config <file>` before and after deployment;
-a zero exit code without exactly one new durable deployment is a failure.
+the snapshot. These checks support preview integrity but do not by themselves
+authorize a production write.
 
 Rollback requires an explicit Worker version UUID or a deployment UUID that
 maps unambiguously to one version at 100% traffic:
@@ -313,9 +315,6 @@ maps unambiguously to one version at 100% traffic:
 ```bash
 agentops rollback example-relay --environment production \
   --version aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
-agentops rollback example-relay --environment production \
-  --version aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa \
-  --confirm --preview-digest <64-lowercase-hex>
 ```
 
 AgentOps resolves the target from Wrangler JSON, rejects an already-active or
@@ -323,9 +322,8 @@ ambiguous target, and verifies that rollback created a new deployment serving
 the selected version at 100% before checking HTTP health. The command does not
 restore KV, D1, R2, Durable Objects, queues, or other bound resource state.
 Target discovery uses `versions list --json` and, when needed,
-`deployments list --json`. Confirmation runs
-`rollback <version-id> --message <bounded-message> --config <file>`, then
-verifies `deployments status --json`.
+`deployments list --json`. Production rollback confirmation remains behind the
+same closed security gate as deployment confirmation.
 
 ### Git Scope And Frozen Input
 

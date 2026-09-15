@@ -18,6 +18,12 @@ import (
 
 var opsCloudflareExecutor = func() opsexec.Executor { return opsexec.NewLocalExecutor() }
 
+// Cloudflare production writes remain closed until execution isolation passes
+// the elevated-risk review gate. Preview and validation stay available.
+var cloudflareProductionWritesEnabled = false
+
+const cloudflareProductionWritesDisabledMessage = "agentops: Cloudflare production writes are temporarily disabled pending security review; use preview mode only"
+
 func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, production opsconfig.Environment, requestedVersion string, confirm bool, previewDigest string, timeout time.Duration, stdout, stderr io.Writer) int {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
@@ -69,6 +75,10 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 	}
 	fmt.Fprintf(stdout, "preview-digest: %s\n", digest)
 	if confirm {
+		if !cloudflareProductionWritesEnabled {
+			fmt.Fprintln(stderr, cloudflareProductionWritesDisabledMessage)
+			return 1
+		}
 		confirmed, err := opscloudflare.Confirm(plan, previewDigest)
 		if err != nil {
 			fmt.Fprintln(stderr, "agentops: Cloudflare deployment preview digest is stale")
