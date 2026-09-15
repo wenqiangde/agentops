@@ -26,6 +26,8 @@ var cloudflareProductionWritesEnabled = false
 const cloudflareProductionWritesDisabledMessage = "agentops: Cloudflare production writes are temporarily disabled pending security review; use preview mode only"
 
 func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, production opsconfig.Environment, requestedVersion string, confirm bool, previewDigest string, timeout time.Duration, stdout, stderr io.Writer) int {
+	correlationID := opscloudflare.NewCorrelationID()
+	gitStarted := time.Now()
 	gitCtx, gitCancel := context.WithTimeout(context.Background(), timeout)
 	gitEvidence, err := opsgit.Inspect(gitCtx, opsgit.Request{
 		RepositoryRoot: service.Source.RepositoryRoot,
@@ -36,29 +38,41 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 		fmt.Fprintln(stderr, "agentops: Cloudflare Git scope inspection failed")
 		return 1
 	}
+	gitStage, err := opscloudflare.NewSuccessfulStageResult(opscloudflare.StageGitInspect, opscloudflare.CodeGitInspectOK, time.Since(gitStarted), correlationID)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare Git stage diagnostic failed")
+		return 1
+	}
+	snapshotStarted := time.Now()
 	snapshot, err := opsCloudflareSnapshot(service.Source.RepositoryRoot, service.Source.Path, service.Source.DeploymentScope)
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare source snapshot failed")
 		return 1
 	}
+	snapshotStage, err := opscloudflare.NewSuccessfulStageResult(opscloudflare.StageSnapshot, opscloudflare.CodeSnapshotOK, time.Since(snapshotStarted), correlationID)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare snapshot stage diagnostic failed")
+		return 1
+	}
 	defer snapshot.Cleanup()
-	planCtx, planCancel := context.WithTimeout(context.Background(), timeout)
-	plan, err := opscloudflare.CreatePlan(planCtx, opsCloudflareExecutor(), opscloudflare.PlanRequest{
+	plan, err := opscloudflare.CreatePlan(context.Background(), opsCloudflareExecutor(), opscloudflare.PlanRequest{
 		Service: service.ID, RequestedVersion: requestedVersion,
 		Git: gitEvidence,
 		Preflight: opscloudflare.Request{
 			SourcePath: snapshot.Path, RepositoryRoot: snapshot.Root, DeploymentScope: service.Source.DeploymentScope, Worker: production.Worker,
 			AccountID: production.AccountID, WranglerConfig: production.WranglerConfig,
-			Timeout: timeout,
+			Timeout: timeout, CorrelationID: correlationID,
 		},
 		RepositorySourcePath: service.Source.Path, DeploymentInputSHA256: snapshot.SHA256,
 		RequireCommittedScope: service.Deployment.RequireCommittedScope,
 	})
-	planCancel()
 	if err != nil {
-		fmt.Fprintln(stderr, "agentops: Cloudflare deployment preview failed")
+		if !writeCloudflareStageDiagnostic(stderr, err) {
+			fmt.Fprintln(stderr, "agentops: Cloudflare deployment preview failed")
+		}
 		return 1
 	}
+	plan.Diagnostics = append([]opscloudflare.StageResult{gitStage, snapshotStage}, plan.Diagnostics...)
 	displayPlan := plan
 	displayPlan.AccountID = maskedCloudflareAccountID(plan.AccountID)
 	encoded, err := json.MarshalIndent(displayPlan, "", "  ")
@@ -135,6 +149,17 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 		fmt.Fprintln(stdout, "deployment: succeeded")
 	}
 	return 0
+}
+
+func writeCloudflareStageDiagnostic(output io.Writer, err error) bool {
+	stageError, ok := opscloudflare.AsStageError(err)
+	if !ok {
+		return false
+	}
+	result := stageError.Result
+	fmt.Fprintf(output, "agentops: stage=%s code=%s elapsed=%s timeout=%s correlation-id=%s remediation=%s\n",
+		result.Stage, result.Code, result.Elapsed, result.Timeout, result.CorrelationID, result.Remediation)
+	return true
 }
 
 func maskedCloudflareAccountID(accountID string) string {

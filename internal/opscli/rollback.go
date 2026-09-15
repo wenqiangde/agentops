@@ -147,8 +147,7 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		return 1
 	}
 	defer snapshot.Cleanup()
-	planCtx, planCancel := context.WithTimeout(context.Background(), timeout)
-	plan, err := opscloudflare.CreateRollbackPlan(planCtx, opsCloudflareExecutor(), opscloudflare.RollbackPlanRequest{
+	plan, err := opscloudflare.CreateRollbackPlan(context.Background(), opsCloudflareExecutor(), opscloudflare.RollbackPlanRequest{
 		Service: service.ID, TargetID: targetID, Git: gitEvidence,
 		Preflight: opscloudflare.Request{
 			SourcePath: snapshot.Path, RepositoryRoot: snapshot.Root, DeploymentScope: service.Source.DeploymentScope, Worker: production.Worker, AccountID: production.AccountID,
@@ -157,9 +156,10 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		RepositorySourcePath: service.Source.Path, DeploymentInputSHA256: snapshot.SHA256,
 		RequireCommittedScope: service.Deployment.RequireCommittedScope,
 	})
-	planCancel()
 	if err != nil {
-		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview failed")
+		if !writeCloudflareStageDiagnostic(stderr, err) {
+			fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview failed")
+		}
 		return 1
 	}
 	displayPlan := plan

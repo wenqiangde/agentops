@@ -51,6 +51,7 @@ type CloudflareDeployPlan struct {
 	DryRunVerified        bool           `json:"dry_run_verified"`
 	Blocked               bool           `json:"blocked"`
 	BlockReason           string         `json:"block_reason,omitempty"`
+	Diagnostics           []StageResult  `json:"diagnostics,omitempty"`
 	SourcePath            string         `json:"-"`
 	Timeout               time.Duration  `json:"-"`
 }
@@ -62,6 +63,7 @@ func CreatePlan(ctx context.Context, executor opsexec.Executor, request PlanRequ
 	if err := validatePlanRequest(request); err != nil {
 		return CloudflareDeployPlan{}, err
 	}
+	request.Preflight.CorrelationID = stageCorrelationID(request.Preflight.CorrelationID)
 	preflight, err := Inspect(ctx, executor, request.Preflight)
 	if err != nil {
 		return CloudflareDeployPlan{}, err
@@ -86,6 +88,7 @@ func CreatePlan(ctx context.Context, executor opsexec.Executor, request PlanRequ
 		DeploymentInputSHA256: request.DeploymentInputSHA256,
 		ScopeEntries:          append([]opsgit.Entry(nil), request.Git.Entries...),
 		RequireCommittedScope: request.RequireCommittedScope,
+		Diagnostics:           append([]StageResult(nil), preflight.Stages...),
 		Blocked:               blocked, SourcePath: request.Preflight.SourcePath, Timeout: request.Preflight.Timeout,
 	}
 	if blocked {
@@ -93,13 +96,13 @@ func CreatePlan(ctx context.Context, executor opsexec.Executor, request PlanRequ
 		return plan, nil
 	}
 
-	dryRun := executor.Run(ctx, opsexec.Request{
+	_, dryRunStage, stageErr := runExternalStage(ctx, executor, opsexec.Request{
 		Program:   "node_modules/.bin/wrangler",
 		Args:      []string{"deploy", "--dry-run", "--config", request.Preflight.WranglerConfig},
 		Directory: request.Preflight.SourcePath, Timeout: request.Preflight.Timeout,
-	})
-	if dryRun.Err != nil || dryRun.TimedOut || dryRun.ExitCode != 0 {
-		return CloudflareDeployPlan{}, errors.New("Cloudflare Wrangler dry-run failed")
+	}, StageDryRun, CodeDryRunOK, CodeDryRunFailed, request.Preflight.CorrelationID, "Cloudflare Wrangler dry-run failed")
+	if stageErr != nil {
+		return CloudflareDeployPlan{}, stageErr
 	}
 	configAfter, err := readRegularFile(configPath, "Wrangler config")
 	if err != nil {
@@ -109,6 +112,7 @@ func CreatePlan(ctx context.Context, executor opsexec.Executor, request PlanRequ
 		return CloudflareDeployPlan{}, errors.New("Wrangler config changed during deployment preview")
 	}
 	plan.DryRunVerified = true
+	plan.Diagnostics = append(plan.Diagnostics, dryRunStage)
 	return plan, nil
 }
 
@@ -151,6 +155,7 @@ func CanonicalJSON(plan CloudflareDeployPlan) ([]byte, error) {
 	normalized := plan
 	normalized.SourcePath = ""
 	normalized.Timeout = 0
+	normalized.Diagnostics = nil
 	normalized.ScopeEntries = append([]opsgit.Entry(nil), plan.ScopeEntries...)
 	sort.Slice(normalized.ScopeEntries, func(i, j int) bool {
 		if normalized.ScopeEntries[i].Path != normalized.ScopeEntries[j].Path {

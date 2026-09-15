@@ -30,6 +30,7 @@ type Request struct {
 	AccountID       string
 	WranglerConfig  string
 	Timeout         time.Duration
+	CorrelationID   string
 }
 
 type Evidence struct {
@@ -37,6 +38,7 @@ type Evidence struct {
 	Worker          string
 	AccountID       string
 	WranglerConfig  string
+	Stages          []StageResult
 }
 
 func Inspect(ctx context.Context, executor opsexec.Executor, request Request) (Evidence, error) {
@@ -56,26 +58,34 @@ func Inspect(ctx context.Context, executor opsexec.Executor, request Request) (E
 		return Evidence{}, err
 	}
 
-	versionResult := executor.Run(ctx, opsexec.Request{
+	correlationID := stageCorrelationID(request.CorrelationID)
+	versionResult, versionStage, stageErr := runExternalStage(ctx, executor, opsexec.Request{
 		Program: "node_modules/.bin/wrangler", Args: []string{"--version"},
 		Directory: request.SourcePath, Timeout: request.Timeout,
-	})
+	}, StageWranglerVersion, CodeWranglerVersionOK, CodeWranglerVersionFailed, correlationID, "project-local Wrangler version check failed")
+	if stageErr != nil {
+		return Evidence{}, stageErr
+	}
 	version, err := checkedVersion(versionResult)
 	if err != nil {
-		return Evidence{}, err
+		return Evidence{}, newStageError(StageWranglerVersion, CodeWranglerVersionFailed, versionResult.Duration, TimeoutNone, correlationID, err.Error())
 	}
-	whoamiResult := executor.Run(ctx, opsexec.Request{
+	whoamiResult, accountStage, stageErr := runExternalStage(ctx, executor, opsexec.Request{
 		Program:   "node_modules/.bin/wrangler",
 		Args:      []string{"whoami", "--account", request.AccountID, "--json"},
 		Directory: request.SourcePath, Timeout: request.Timeout,
-	})
+	}, StageAccountMembership, CodeAccountMembershipOK, CodeAccountMembershipFailed, correlationID, "Cloudflare authentication check failed")
+	if stageErr != nil {
+		return Evidence{}, stageErr
+	}
 	if err := checkAccountMembership(whoamiResult, request.AccountID); err != nil {
-		return Evidence{}, err
+		return Evidence{}, newStageError(StageAccountMembership, CodeAccountMembershipFailed, whoamiResult.Duration, TimeoutNone, correlationID, err.Error())
 	}
 	return Evidence{
 		WranglerVersion: version,
 		Worker:          request.Worker, AccountID: request.AccountID,
 		WranglerConfig: request.WranglerConfig,
+		Stages:         []StageResult{versionStage, accountStage},
 	}, nil
 }
 

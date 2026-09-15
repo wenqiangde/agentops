@@ -293,6 +293,21 @@ Generate and review a preview:
 agentops deploy example-relay --environment production --version 2026.09.14-1
 ```
 
+Successful deployment previews include bounded diagnostics for `git-inspect`,
+`snapshot`, `wrangler-version`, `account-membership`, and `dry-run`. Each entry
+contains a stable stage code, elapsed duration in nanoseconds, timeout
+classification, one correlation ID shared by that preview, and a fixed safe
+remediation message. Runtime diagnostics are excluded from the canonical
+preview digest, so elapsed time and correlation ID changes do not invalidate an
+otherwise identical plan.
+
+An external-stage failure prints the same bounded fields as a single diagnostic
+line. It never includes raw Wrangler stdout/stderr, tokens, the complete account
+ID, source content, or arbitrary command details. Each external stage receives
+its own configured timeout budget; time consumed by an earlier stage does not
+reduce a later stage's budget. Timeout classification is `none`,
+`deadline-exceeded`, or `cancelled` for the active stage.
+
 Cloudflare production writes are temporarily disabled. A deploy or rollback
 invocation with `--confirm` exits nonzero after producing the current preview
 and digest, before any production Wrangler command. This gate is compiled into

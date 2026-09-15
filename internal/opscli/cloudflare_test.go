@@ -66,6 +66,80 @@ func TestOpsDeployRoutesCloudflareWorkerToReadOnlyPreview(t *testing.T) {
 	}
 }
 
+func TestOpsDeployDryRunFailureReportsSafeStageDiagnostics(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+	fake := &cliCloudflareExecutor{results: []opsexec.Result{
+		{ExitCode: 0, Stdout: "4.35.0\n", Duration: 5 * time.Millisecond},
+		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`, Duration: 7 * time.Millisecond},
+		{ExitCode: 1, Stdout: "private source output", Stderr: "token=private-token account=0123456789abcdef0123456789abcdef", Duration: 125 * time.Millisecond},
+	}}
+	previous := opsCloudflareExecutor
+	opsCloudflareExecutor = func() opsexec.Executor { return fake }
+	t.Cleanup(func() { opsCloudflareExecutor = previous })
+
+	var stdout, stderr bytes.Buffer
+	code, handled := executeRootCommand(p, []string{
+		"ops", "deploy", "example-relay", "--environment", "production", "--version", "2026.09.15-1",
+	}, &stdout, &stderr)
+	if !handled || code != 1 {
+		t.Fatalf("handled=%v code=%d out=%q err=%q", handled, code, stdout.String(), stderr.String())
+	}
+	diagnostic := stderr.String()
+	for _, wanted := range []string{
+		"stage=dry-run",
+		"code=CF_DRY_RUN_FAILED",
+		"elapsed=125ms",
+		"timeout=none",
+		"correlation-id=",
+		"remediation=Inspect the private operation report, correct the dry-run input, and rerun the preview.",
+	} {
+		if !strings.Contains(diagnostic, wanted) {
+			t.Fatalf("diagnostic missing %q: %s", wanted, diagnostic)
+		}
+	}
+	if strings.Contains(diagnostic, "deployment preview failed") {
+		t.Fatalf("generic preview error remained: %s", diagnostic)
+	}
+	for _, private := range []string{"private source output", "private-token", "0123456789abcdef0123456789abcdef"} {
+		if strings.Contains(stdout.String(), private) || strings.Contains(diagnostic, private) {
+			t.Fatalf("private execution output leaked: out=%q err=%q", stdout.String(), diagnostic)
+		}
+	}
+}
+
+func TestOpsDeployPreviewReportsSuccessfulStageTimings(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+	fake := successfulCLICloudflareExecutor()
+	fake.results[0].Duration = 5 * time.Millisecond
+	fake.results[1].Duration = 7 * time.Millisecond
+	fake.results[2].Duration = 11 * time.Millisecond
+	previous := opsCloudflareExecutor
+	opsCloudflareExecutor = func() opsexec.Executor { return fake }
+	t.Cleanup(func() { opsCloudflareExecutor = previous })
+
+	var stdout, stderr bytes.Buffer
+	code, _ := executeRootCommand(p, []string{
+		"ops", "deploy", "example-relay", "--environment", "production", "--version", "2026.09.15-1",
+	}, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
+	}
+	for _, stage := range []string{"git-inspect", "snapshot", "wrangler-version", "account-membership", "dry-run"} {
+		if !strings.Contains(stdout.String(), `"stage": "`+stage+`"`) {
+			t.Fatalf("preview missing successful stage %q: %s", stage, stdout.String())
+		}
+	}
+	for _, elapsed := range []string{`"elapsed": 5000000`, `"elapsed": 7000000`, `"elapsed": 11000000`} {
+		if !strings.Contains(stdout.String(), elapsed) {
+			t.Fatalf("preview missing elapsed evidence %q: %s", elapsed, stdout.String())
+		}
+	}
+}
+
 func TestOpsDeployPreviewUsesRepositoryScopeSnapshotForSiblingAssets(t *testing.T) {
 	p := opsTestPaths(t, "valid")
 	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
@@ -302,7 +376,7 @@ func TestOpsDeployRejectsCloudflareInputDriftBeforeProductionCommand(t *testing.
 					{ExitCode: 0, Stdout: `{"accounts":[{"id":"ffffffffffffffffffffffffffffffff"}]}`},
 				}}
 			},
-			wantError: "preview failed",
+			wantError: "stage=account-membership",
 		},
 		{
 			name:   "Wrangler version",
