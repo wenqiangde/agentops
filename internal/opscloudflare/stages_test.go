@@ -147,7 +147,7 @@ func TestCloudflareSlowExecutorClassifiesEachTimedOutStage(t *testing.T) {
 		{
 			name: "account membership",
 			responses: []timedStageResponse{
-				{result: opsexec.Result{ExitCode: 0, Stdout: "4.35.0\n"}},
+				{result: opsexec.Result{ExitCode: 0, Stdout: "4.107.0\n"}},
 				{delay: 100 * time.Millisecond},
 			},
 			wantStage: opscloudflare.StageAccountMembership, wantCode: opscloudflare.CodeAccountMembershipFailed,
@@ -155,7 +155,7 @@ func TestCloudflareSlowExecutorClassifiesEachTimedOutStage(t *testing.T) {
 		{
 			name: "dry-run",
 			responses: []timedStageResponse{
-				{result: opsexec.Result{ExitCode: 0, Stdout: "4.35.0\n"}},
+				{result: opsexec.Result{ExitCode: 0, Stdout: "4.107.0\n"}},
 				{result: opsexec.Result{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`}},
 				{result: opsexec.Result{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`}},
 				{delay: 100 * time.Millisecond},
@@ -194,7 +194,7 @@ func TestCloudflareStagesReceiveIndependentTimeoutBudgets(t *testing.T) {
 	request := samplePlanRequest(newCloudflareProject(t))
 	request.Preflight.Timeout = 200 * time.Millisecond
 	executor := &timedStageExecutor{responses: []timedStageResponse{
-		{delay: 80 * time.Millisecond, result: opsexec.Result{ExitCode: 0, Stdout: "4.35.0\n"}},
+		{delay: 80 * time.Millisecond, result: opsexec.Result{ExitCode: 0, Stdout: "4.107.0\n"}},
 		{delay: 80 * time.Millisecond, result: opsexec.Result{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`}},
 		{delay: 80 * time.Millisecond, result: opsexec.Result{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`}},
 		{delay: 80 * time.Millisecond, result: opsexec.Result{ExitCode: 0}},

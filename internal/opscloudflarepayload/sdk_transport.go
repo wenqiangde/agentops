@@ -20,7 +20,7 @@ import (
 	"github.com/zeebo/blake3"
 )
 
-const cloudflareSDKVersion = "cloudflare-go/v7.7.0"
+const ProductionClientVersion = "cloudflare-go/v7.7.0"
 
 type sdkProductionTransport struct {
 	baseURL string
@@ -57,7 +57,7 @@ func (s sdkProductionTransport) Deploy(ctx context.Context, token []byte, reques
 	}
 	service := workers.NewWorkerService(options...)
 	started := time.Now().UTC()
-	evidence := Evidence{ClientVersion: cloudflareSDKVersion, InputSHA256: request.ExpectedSHA256, StartedAt: started}
+	evidence := Evidence{ClientVersion: ProductionClientVersion, InputSHA256: request.ExpectedSHA256, StartedAt: started}
 	if err := verifyEndpointsReadOnly(ctx, service, request, config, sequence); err != nil {
 		return evidence, err
 	}
@@ -155,7 +155,7 @@ func (s sdkProductionTransport) Rollback(ctx context.Context, token []byte, requ
 	started := time.Now().UTC()
 	sequence := newRollbackEndpointSequenceGuard(request)
 	evidence := Evidence{
-		ClientVersion: cloudflareSDKVersion, VersionIDs: []string{request.TargetVersionID},
+		ClientVersion: ProductionClientVersion, VersionIDs: []string{request.TargetVersionID},
 		InputSHA256: request.ExpectedSHA256, StartedAt: started,
 	}
 	if err := verifyCurrentDeployment(ctx, service, request.AccountID, request.Worker, request.PreviousDeploymentID, nil, sequence); err != nil {

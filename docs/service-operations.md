@@ -75,6 +75,7 @@ environments:
     worker: example-relay
     accountId: 0123456789abcdef0123456789abcdef
     wranglerConfig: wrangler.jsonc
+    apiProfile: wrangler-4.107-preveal-v1
     health:
       type: http
       url: https://api.example.com/health
@@ -285,7 +286,7 @@ and the project-local dry run:
 node_modules/.bin/wrangler --version
 node_modules/.bin/wrangler whoami --account <account-id> --json
 node_modules/.bin/wrangler deployments status --json --config <file>
-node_modules/.bin/wrangler deploy --dry-run --config <file>
+node_modules/.bin/wrangler deploy --dry-run --outdir .agentops-production-bundle --config <file>
 ```
 
 Generate and review a preview:
@@ -316,22 +317,35 @@ its own configured timeout budget; time consumed by an earlier stage does not
 reduce a later stage's budget. Timeout classification is `none`,
 `deadline-exceeded`, or `cancelled` for the active stage.
 
-Cloudflare production writes are temporarily disabled. A deploy or rollback
-invocation with `--confirm` exits nonzero after producing the current preview
-and digest, before any production Wrangler command. This gate is compiled into
-the CLI and cannot be enabled by service configuration or an environment
-variable. SSH deployment and rollback are unaffected.
+Cloudflare production routing requires the supported `apiProfile`, the exact
+production preview digest, and the reviewed trusted API client. The client reads
+its credential only from the inherited `AGENTOPS_CLOUDFLARE_API_TOKEN`
+environment variable after confirmation. A missing or invalid profile, missing
+or stale digest, missing token, payload mismatch, or unavailable trusted client
+fails closed. The token must not be stored in service YAML, argv, reports, or
+project files. SSH deployment and rollback are unaffected.
 
-The implementation below the closed gate now separates Wrangler preview work
-from production execution. Wrangler remains a pre-confirmation version,
+The `wrangler-4.107-preveal-v1` profile accepts only stable Wrangler `4.107.x`
+versions. Earlier, later, prerelease, or otherwise mismatched versions fail
+before dry-run output can become a production payload. Wrangler writes its
+bundled Worker into the controlled snapshot output directory; AgentOps captures
+exactly one generated JavaScript module plus approved assets into owned memory.
+It never substitutes the configured TypeScript or JavaScript source entry for
+the generated bundle. Symlinks, missing bundles, ambiguous multiple modules,
+and unsupported output files fail closed. The temporary bundle directory is
+removed after capture so snapshot sealing continues to validate only the
+original approved source snapshot.
+
+Wrangler remains a pre-confirmation version,
 membership, and dry-run tool only. A production confirmation owns copied module,
 asset, metadata, or rollback-request values and binds the API profile, pinned
 client version, ordered endpoint sequence, and the fixed token-provider identity
 into a separate canonical digest. Token bytes and token hashes never enter that
 material. The production action re-computes the digest immediately before the
 typed Cloudflare API writer; a stale or mutated value stops with no writer call
-and no project path is reopened. This boundary still requires the planned
-adversarial review before the CLI gate can be removed.
+and no project path is reopened. Opening this routing capability does not
+authorize a production operation: the first real deploy or rollback still
+requires the separately approved, digest-specific rehearsal procedure.
 
 The endpoint sequence is derived from the canonical profile and owned payload;
 callers cannot supply an alternate, shorter, reordered, or additional sequence.
@@ -454,4 +468,4 @@ AgentOps stops before writes when inventory validation fails, the SSH alias or r
 
 Private JSON reports are written under `operations/reports` with mode `0600`. They contain bounded step, health, digest, recovery, and timing evidence without raw command output or credential values.
 
-Automated tests and a local read-only smoke test cover the current implementation. A real-host read-only pilot and all real production writes remain pending explicit authorization; this feature is not yet declared production-ready.
+Automated tests and local fake-backed checks cover the current implementation. No production deploy or rollback is part of release verification. A real production operation remains pending the separately authorized, digest-specific rehearsal and must not be inferred from installation, configuration, release, or a prior review approval.

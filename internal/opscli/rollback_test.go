@@ -196,7 +196,7 @@ func TestOpsRollbackRejectsCloudflareProductionWriteWhileSecurityGateIsClosed(t 
 	opsCloudflareExecutor = func() opsexec.Executor { return confirmedExecutor }
 	var stdout, stderr bytes.Buffer
 	confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
-	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "production writes are temporarily disabled") {
+	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "rollback apply failed") {
 		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
 	}
 	if hasCloudflareRollback(confirmedExecutor.requests) {
@@ -206,7 +206,7 @@ func TestOpsRollbackRejectsCloudflareProductionWriteWhileSecurityGateIsClosed(t 
 
 func successfulCLICloudflareRollbackExecutor(target string) *cliCloudflareExecutor {
 	return &cliCloudflareExecutor{results: []opsexec.Result{
-		{ExitCode: 0, Stdout: "4.35.0\n"},
+		{ExitCode: 0, Stdout: "4.107.0\n"},
 		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`},
 		{ExitCode: 0, Stdout: `[{"id":"` + target + `"}]`},
 		{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","percentage":100}]}`},

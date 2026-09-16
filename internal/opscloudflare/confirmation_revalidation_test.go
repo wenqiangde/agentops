@@ -68,6 +68,38 @@ func TestApplyRollbackRevalidatesOwnedProductionConfirmationImmediatelyBeforeWri
 	}
 }
 
+func TestRollbackProductionConfirmationRejectsUnsupportedProfileOrWranglerVersion(t *testing.T) {
+	requestFor := func(t *testing.T, plan CloudflareRollbackPlan) opscloudflarepayload.RollbackRequest {
+		t.Helper()
+		request, err := opscloudflarepayload.NewRollbackRequest(plan.AccountID, plan.Worker, plan.TargetVersionID, plan.CurrentDeploymentID, plan.DeploymentInputSHA256, time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return request
+	}
+	for _, test := range []struct {
+		name    string
+		profile string
+		version string
+	}{
+		{name: "unsupported profile", profile: "wrangler-4.108-unknown", version: "4.107.0"},
+		{name: "unsupported Wrangler version", profile: "wrangler-4.107-preveal-v1", version: "4.108.0"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan := internalRollbackPlan()
+			plan.WranglerVersion = test.version
+			request := requestFor(t, plan)
+			identity := ProductionConfirmationIdentity{
+				APIProfile: test.profile, ClientVersion: "cloudflare-go/v7.7.0",
+				EndpointSequence: opscloudflarepayload.RollbackEndpointSequence(request), TokenProviderIdentity: "environment",
+			}
+			if _, err := RollbackProductionDigest(plan, request, identity); err == nil {
+				t.Fatal("unsupported rollback production profile reached the confirmation boundary")
+			}
+		})
+	}
+}
+
 type internalDeploymentWriter struct{ calls int }
 
 func (w *internalDeploymentWriter) Deploy(context.Context, opscloudflarepayload.Request) (opscloudflarepayload.Evidence, error) {
@@ -111,7 +143,7 @@ func internalDeployPlan(payloadDigest string) CloudflareDeployPlan {
 	return CloudflareDeployPlan{
 		Service: "example-relay", Environment: "production", RequestedVersion: "2026.09.15-1",
 		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
-		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: "1111111111111111111111111111111111111111111111111111111111111111", WranglerVersion: "4.35.0",
+		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: "1111111111111111111111111111111111111111111111111111111111111111", WranglerVersion: "4.107.0",
 		BaseCommit: "2222222222222222222222222222222222222222", ScopeState: "clean", ScopeContentSHA256: "3333333333333333333333333333333333333333333333333333333333333333",
 		DeploymentInputSHA256: payloadDigest, DryRunVerified: true,
 		CurrentDeploymentID: "11111111-1111-4111-8111-111111111111", CurrentVersionIDs: []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
@@ -121,7 +153,7 @@ func internalDeployPlan(payloadDigest string) CloudflareDeployPlan {
 func internalRollbackPlan() CloudflareRollbackPlan {
 	return CloudflareRollbackPlan{
 		Service: "example-relay", Environment: "production", Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
-		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: "1111111111111111111111111111111111111111111111111111111111111111", WranglerVersion: "4.35.0",
+		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: "1111111111111111111111111111111111111111111111111111111111111111", WranglerVersion: "4.107.0",
 		BaseCommit: "2222222222222222222222222222222222222222", ScopeState: "clean", ScopeContentSHA256: "3333333333333333333333333333333333333333333333333333333333333333",
 		DeploymentInputSHA256: "4444444444444444444444444444444444444444444444444444444444444444",
 		TargetVersionID:       "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", CurrentDeploymentID: "11111111-1111-4111-8111-111111111111",

@@ -92,7 +92,7 @@ func TestConfirmRollbackPlanRejectsTargetSourceAndAccountDrift(t *testing.T) {
 	base := opscloudflare.CloudflareRollbackPlan{
 		Service: "example-relay", Environment: "production",
 		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
-		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.35.0",
+		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.107.0",
 		BaseCommit: strings.Repeat("2", 40), ScopeState: opsgit.StateClean, ScopeContentSHA256: strings.Repeat("3", 64),
 		DeploymentInputSHA256: strings.Repeat("4", 64),
 		TargetVersionID:       "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -232,7 +232,7 @@ func sampleCloudflareRollbackPlan() opscloudflare.CloudflareRollbackPlan {
 	return opscloudflare.CloudflareRollbackPlan{
 		Service: "example-relay", Environment: "production",
 		Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
-		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.35.0",
+		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.107.0",
 		BaseCommit: strings.Repeat("2", 40), ScopeState: opsgit.StateClean, ScopeContentSHA256: strings.Repeat("3", 64),
 		DeploymentInputSHA256: strings.Repeat("4", 64),
 		TargetVersionID:       "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",

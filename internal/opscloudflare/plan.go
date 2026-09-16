@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"time"
 
+	"github.com/wenqiangde/agentops/internal/opscloudflarepayload"
 	"github.com/wenqiangde/agentops/internal/opsexec"
 	"github.com/wenqiangde/agentops/internal/opsgit"
 )
@@ -30,6 +32,7 @@ type PlanRequest struct {
 	Preflight             Request
 	RepositorySourcePath  string
 	DeploymentInputSHA256 string
+	APIProfile            string
 	RequireCommittedScope bool
 }
 
@@ -46,6 +49,7 @@ type CloudflareDeployPlan struct {
 	ScopeState            string         `json:"scope_state"`
 	ScopeContentSHA256    string         `json:"scope_content_sha256"`
 	DeploymentInputSHA256 string         `json:"deployment_input_sha256"`
+	SourceSnapshotSHA256  string         `json:"source_snapshot_sha256"`
 	CurrentDeploymentID   string         `json:"current_deployment_id"`
 	CurrentVersionIDs     []string       `json:"current_version_ids"`
 	ScopeEntries          []opsgit.Entry `json:"scope_entries,omitempty"`
@@ -56,6 +60,7 @@ type CloudflareDeployPlan struct {
 	Diagnostics           []StageResult  `json:"diagnostics,omitempty"`
 	SourcePath            string         `json:"-"`
 	Timeout               time.Duration  `json:"-"`
+	BundleDirectory       string         `json:"-"`
 }
 
 func CreatePlan(ctx context.Context, executor opsexec.Executor, request PlanRequest) (CloudflareDeployPlan, error) {
@@ -68,6 +73,9 @@ func CreatePlan(ctx context.Context, executor opsexec.Executor, request PlanRequ
 	request.Preflight.CorrelationID = stageCorrelationID(request.Preflight.CorrelationID)
 	preflight, err := Inspect(ctx, executor, request.Preflight)
 	if err != nil {
+		return CloudflareDeployPlan{}, err
+	}
+	if err := opscloudflarepayload.ValidateWranglerVersion(request.APIProfile, preflight.WranglerVersion); err != nil {
 		return CloudflareDeployPlan{}, err
 	}
 	configPath := filepath.Join(request.Preflight.SourcePath, request.Preflight.WranglerConfig)
@@ -88,6 +96,7 @@ func CreatePlan(ctx context.Context, executor opsexec.Executor, request PlanRequ
 		BaseCommit:           request.Git.BaseCommit, ScopeState: request.Git.State,
 		ScopeContentSHA256:    request.Git.ContentSHA256,
 		DeploymentInputSHA256: request.DeploymentInputSHA256,
+		SourceSnapshotSHA256:  request.DeploymentInputSHA256,
 		ScopeEntries:          append([]opsgit.Entry(nil), request.Git.Entries...),
 		RequireCommittedScope: request.RequireCommittedScope,
 		Diagnostics:           append([]StageResult(nil), preflight.Stages...),
@@ -103,10 +112,14 @@ func CreatePlan(ctx context.Context, executor opsexec.Executor, request PlanRequ
 	}
 	plan.CurrentDeploymentID = current.ID
 	plan.CurrentVersionIDs = deploymentVersionIDs(current)
+	bundleDirectory := filepath.Join(request.Preflight.SourcePath, opscloudflarepayload.BundleOutputDirectory)
+	if _, err := os.Lstat(bundleDirectory); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return CloudflareDeployPlan{}, errors.New("Cloudflare Wrangler bundle output path is unavailable")
+	}
 
 	_, dryRunStage, stageErr := runExternalStage(ctx, executor, opsexec.Request{
 		Program:   "node_modules/.bin/wrangler",
-		Args:      []string{"deploy", "--dry-run", "--config", request.Preflight.WranglerConfig},
+		Args:      []string{"deploy", "--dry-run", "--outdir", opscloudflarepayload.BundleOutputDirectory, "--config", request.Preflight.WranglerConfig},
 		Directory: request.Preflight.SourcePath, Timeout: request.Preflight.Timeout,
 	}, StageDryRun, CodeDryRunOK, CodeDryRunFailed, request.Preflight.CorrelationID, "Cloudflare Wrangler dry-run failed")
 	if stageErr != nil {
@@ -120,6 +133,7 @@ func CreatePlan(ctx context.Context, executor opsexec.Executor, request PlanRequ
 		return CloudflareDeployPlan{}, errors.New("Wrangler config changed during deployment preview")
 	}
 	plan.DryRunVerified = true
+	plan.BundleDirectory = opscloudflarepayload.BundleOutputDirectory
 	plan.Diagnostics = append(plan.Diagnostics, dryRunStage)
 	return plan, nil
 }

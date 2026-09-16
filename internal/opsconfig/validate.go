@@ -261,6 +261,9 @@ func validateCloudflareEnvironment(service Service, name, prefix string, environ
 		if environment.AccountID != "" {
 			issues = append(issues, issue(service, prefix+"accountId", "is only allowed for cloudflare-workers"))
 		}
+		if environment.APIProfile != "" {
+			issues = append(issues, issue(service, prefix+"apiProfile", "is only allowed for cloudflare-workers"))
+		}
 		return issues
 	}
 	if name != EnvironmentProduction {
@@ -284,6 +287,9 @@ func validateCloudflareEnvironment(service Service, name, prefix string, environ
 	config := filepath.Clean(environment.WranglerConfig)
 	if environment.WranglerConfig == "" || filepath.IsAbs(environment.WranglerConfig) || config != environment.WranglerConfig || config == "." || config == ".." || strings.HasPrefix(config, ".."+string(filepath.Separator)) {
 		issues = append(issues, issue(service, prefix+"wranglerConfig", "must be a clean relative path within the source root"))
+	}
+	if environment.APIProfile != "wrangler-4.107-preveal-v1" {
+		issues = append(issues, issue(service, prefix+"apiProfile", "must select a supported Cloudflare production API profile"))
 	}
 	return issues
 }

@@ -3,12 +3,16 @@ package opscli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"time"
 
 	"github.com/wenqiangde/agentops/internal/opscloudflare"
+	"github.com/wenqiangde/agentops/internal/opscloudflarepayload"
 	"github.com/wenqiangde/agentops/internal/opsconfig"
 	"github.com/wenqiangde/agentops/internal/opsexec"
 	"github.com/wenqiangde/agentops/internal/opsgit"
@@ -19,11 +23,32 @@ import (
 var opsCloudflareExecutor = func() opsexec.Executor { return opsexec.NewLocalExecutor() }
 var opsCloudflareSnapshot = opscloudflare.CreateDeploymentSnapshot
 
-// Cloudflare production writes remain closed until execution isolation passes
-// the elevated-risk review gate. Preview and validation stay available.
-var cloudflareProductionWritesEnabled = false
+type cloudflareProductionWriter interface {
+	opscloudflare.DeploymentWriter
+	opscloudflare.RollbackWriter
+}
 
-const cloudflareProductionWritesDisabledMessage = "agentops: Cloudflare production writes are temporarily disabled pending security review; use preview mode only"
+var opsCloudflareProductionClient = func() (cloudflareProductionWriter, error) {
+	return opscloudflarepayload.NewCloudflareClient(cloudflareEnvironmentTokenProvider{})
+}
+
+type cloudflareEnvironmentTokenProvider struct{}
+
+func (cloudflareEnvironmentTokenProvider) Token(ctx context.Context) ([]byte, error) {
+	if ctx == nil {
+		return nil, context.Canceled
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	value, found := os.LookupEnv("AGENTOPS_CLOUDFLARE_API_TOKEN")
+	if !found || value == "" {
+		return nil, fmt.Errorf("Cloudflare production token is unavailable")
+	}
+	return []byte(value), nil
+}
+
+func (cloudflareEnvironmentTokenProvider) Identity() string { return "environment" }
 
 func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, production opsconfig.Environment, requestedVersion string, confirm bool, previewDigest string, timeout time.Duration, stdout, stderr io.Writer) int {
 	correlationID := opscloudflare.NewCorrelationID()
@@ -64,13 +89,58 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 			Timeout: timeout, CorrelationID: correlationID,
 		},
 		RepositorySourcePath: service.Source.Path, DeploymentInputSHA256: snapshot.SHA256,
+		APIProfile:            production.APIProfile,
 		RequireCommittedScope: service.Deployment.RequireCommittedScope,
 	})
 	if err != nil {
+		if errors.Is(err, opscloudflarepayload.ErrUnsupportedWranglerProfile) {
+			fmt.Fprintln(stderr, "agentops: Cloudflare production capability validation failed")
+			return 1
+		}
 		if !writeCloudflareStageDiagnostic(stderr, err) {
 			fmt.Fprintln(stderr, "agentops: Cloudflare deployment preview failed")
 		}
 		return 1
+	}
+	configBytes, err := os.ReadFile(filepath.Join(snapshot.Path, production.WranglerConfig))
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare production capability validation failed")
+		return 1
+	}
+	config, err := opscloudflarepayload.ParseWranglerConfig(production.APIProfile, configBytes)
+	if err != nil || config.Name != production.Worker || config.AccountID != production.AccountID {
+		fmt.Fprintln(stderr, "agentops: Cloudflare production capability validation failed")
+		return 1
+	}
+	sourceRelative, err := filepath.Rel(snapshot.Root, snapshot.Path)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare production payload boundary failed")
+		return 1
+	}
+	bundleRelative := filepath.Join(sourceRelative, plan.BundleDirectory)
+	payload, _, err := opscloudflarepayload.BuildPayload(snapshot.Root, filepath.Join(sourceRelative, production.WranglerConfig), bundleRelative, production.APIProfile)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare production payload capture failed")
+		return 1
+	}
+	if err := os.RemoveAll(filepath.Join(snapshot.Root, bundleRelative)); err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare production bundle cleanup failed")
+		return 1
+	}
+	request, err := opscloudflarepayload.NewRequest(plan.AccountID, plan.Worker, plan.CurrentDeploymentID, plan.CurrentVersionIDs, payload.SHA256, payload, timeout)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare production request construction failed")
+		return 1
+	}
+	plan.DeploymentInputSHA256 = payload.SHA256
+	endpointSequence, err := opscloudflarepayload.EndpointSequence(request)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare production endpoint validation failed")
+		return 1
+	}
+	identity := opscloudflare.ProductionConfirmationIdentity{
+		APIProfile: production.APIProfile, ClientVersion: opscloudflarepayload.ProductionClientVersion,
+		EndpointSequence: endpointSequence, TokenProviderIdentity: cloudflareEnvironmentTokenProvider{}.Identity(),
 	}
 	plan.Diagnostics = append([]opscloudflare.StageResult{gitStage, snapshotStage}, plan.Diagnostics...)
 	displayPlan := plan
@@ -85,18 +155,14 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 		fmt.Fprintf(stderr, "agentops: Cloudflare deployment preview blocked: %s\n", plan.BlockReason)
 		return 1
 	}
-	digest, err := opscloudflare.Digest(plan)
+	digest, err := opscloudflare.ProductionDigest(plan, request, identity)
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare deployment preview digest failed")
 		return 1
 	}
 	fmt.Fprintf(stdout, "preview-digest: %s\n", digest)
 	if confirm {
-		if !cloudflareProductionWritesEnabled {
-			fmt.Fprintln(stderr, cloudflareProductionWritesDisabledMessage)
-			return 1
-		}
-		_, err := opscloudflare.Confirm(plan, previewDigest)
+		confirmed, err := opscloudflare.ConfirmProduction(plan, request, identity, previewDigest)
 		if err != nil {
 			fmt.Fprintln(stderr, "agentops: Cloudflare deployment preview digest is stale")
 			return 1
@@ -112,9 +178,12 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 			return 1
 		}
 		started := time.Now().UTC()
-		// Task 5 binds the confirmed owned payload and token-backed client here.
-		// Until then, the closed production gate and nil writer both fail closed.
-		result, err := opscloudflare.Apply(applyCtx, nil, opscloudflare.ConfirmedProductionPlan{})
+		client, err := opsCloudflareProductionClient()
+		if err != nil {
+			fmt.Fprintln(stderr, "agentops: Cloudflare trusted production client is unavailable")
+			return 1
+		}
+		result, err := opscloudflare.Apply(applyCtx, client, confirmed)
 		if err != nil || !result.Success {
 			if result.ProductionWriteSucceeded {
 				if reportErr := writeCloudflareApplyFailureReport(reportRoot, "cloudflare-deploy", digest, plan, result, started, time.Now().UTC(), stdout); reportErr != nil {

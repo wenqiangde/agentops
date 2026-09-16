@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/wenqiangde/agentops/internal/opscloudflare"
+	"github.com/wenqiangde/agentops/internal/opscloudflarepayload"
 	"github.com/wenqiangde/agentops/internal/opsconfig"
 	"github.com/wenqiangde/agentops/internal/opsdeploy"
 	"github.com/wenqiangde/agentops/internal/opsexec"
@@ -162,6 +165,29 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		}
 		return 1
 	}
+	if err := opscloudflarepayload.ValidateWranglerVersion(production.APIProfile, plan.WranglerVersion); err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare production capability validation failed")
+		return 1
+	}
+	configBytes, err := os.ReadFile(filepath.Join(snapshot.Path, production.WranglerConfig))
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare production capability validation failed")
+		return 1
+	}
+	config, err := opscloudflarepayload.ParseWranglerConfig(production.APIProfile, configBytes)
+	if err != nil || config.Name != production.Worker || config.AccountID != production.AccountID {
+		fmt.Fprintln(stderr, "agentops: Cloudflare production capability validation failed")
+		return 1
+	}
+	request, err := opscloudflarepayload.NewRollbackRequest(plan.AccountID, plan.Worker, plan.TargetVersionID, plan.CurrentDeploymentID, plan.DeploymentInputSHA256, timeout)
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare production rollback request construction failed")
+		return 1
+	}
+	identity := opscloudflare.ProductionConfirmationIdentity{
+		APIProfile: production.APIProfile, ClientVersion: opscloudflarepayload.ProductionClientVersion,
+		EndpointSequence: opscloudflarepayload.RollbackEndpointSequence(request), TokenProviderIdentity: cloudflareEnvironmentTokenProvider{}.Identity(),
+	}
 	displayPlan := plan
 	displayPlan.AccountID = maskedCloudflareAccountID(plan.AccountID)
 	encoded, err := json.MarshalIndent(displayPlan, "", "  ")
@@ -174,7 +200,7 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		fmt.Fprintf(stderr, "agentops: Cloudflare rollback preview blocked: %s\n", plan.BlockReason)
 		return 1
 	}
-	digest, err := opscloudflare.RollbackDigest(plan)
+	digest, err := opscloudflare.RollbackProductionDigest(plan, request, identity)
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest failed")
 		return 1
@@ -183,11 +209,7 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 	if !confirm {
 		return 0
 	}
-	if !cloudflareProductionWritesEnabled {
-		fmt.Fprintln(stderr, cloudflareProductionWritesDisabledMessage)
-		return 1
-	}
-	_, err = opscloudflare.ConfirmRollbackPlan(plan, previewDigest)
+	confirmed, err := opscloudflare.ConfirmProductionRollback(plan, request, identity, previewDigest)
 	if err != nil {
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback preview digest is stale")
 		return 1
@@ -203,9 +225,12 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 		return 1
 	}
 	started := time.Now().UTC()
-	// Task 5 binds the confirmed rollback request and token-backed client here.
-	// Until then, the closed production gate and nil writer both fail closed.
-	result, err := opscloudflare.ApplyRollback(applyCtx, nil, opscloudflare.ConfirmedProductionRollbackPlan{})
+	client, err := opsCloudflareProductionClient()
+	if err != nil {
+		fmt.Fprintln(stderr, "agentops: Cloudflare trusted production client is unavailable")
+		return 1
+	}
+	result, err := opscloudflare.ApplyRollback(applyCtx, client, confirmed)
 	if err != nil || !result.Success {
 		if result.ProductionWriteSucceeded {
 			if reportErr := writeCloudflareRollbackFailureReport(reportRoot, digest, plan, result, started, time.Now().UTC(), stdout); reportErr != nil {

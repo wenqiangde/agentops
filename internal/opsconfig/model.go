@@ -84,6 +84,7 @@ type Environment struct {
 	Worker         string         `yaml:"worker,omitempty"`
 	AccountID      string         `yaml:"accountId,omitempty"`
 	WranglerConfig string         `yaml:"wranglerConfig,omitempty"`
+	APIProfile     string         `yaml:"apiProfile,omitempty"`
 	Config         ConfigContract `yaml:"config,omitempty"`
 	Health         Health         `yaml:"health,omitempty"`
 }

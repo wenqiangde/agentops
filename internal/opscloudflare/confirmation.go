@@ -39,6 +39,9 @@ type rollbackProductionConfirmationMaterial struct {
 var productionIdentityPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._+/-]{0,127}$`)
 
 func ProductionCanonicalJSON(plan CloudflareDeployPlan, request opscloudflarepayload.Request, identity ProductionConfirmationIdentity) ([]byte, error) {
+	if err := opscloudflarepayload.ValidateWranglerVersion(identity.APIProfile, plan.WranglerVersion); err != nil {
+		return nil, errors.New("Cloudflare production execution profile is unsupported")
+	}
 	planJSON, err := CanonicalJSON(plan)
 	if err != nil {
 		return nil, errors.New("Cloudflare production plan is invalid")
@@ -99,6 +102,9 @@ func ProductionDigest(plan CloudflareDeployPlan, request opscloudflarepayload.Re
 }
 
 func RollbackProductionCanonicalJSON(plan CloudflareRollbackPlan, request opscloudflarepayload.RollbackRequest, identity ProductionConfirmationIdentity) ([]byte, error) {
+	if err := opscloudflarepayload.ValidateWranglerVersion(identity.APIProfile, plan.WranglerVersion); err != nil {
+		return nil, errors.New("Cloudflare rollback production execution profile is unsupported")
+	}
 	planJSON, err := RollbackCanonicalJSON(plan)
 	if err != nil {
 		return nil, errors.New("Cloudflare rollback plan is invalid")

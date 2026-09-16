@@ -24,7 +24,7 @@ func TestOpsDeployRoutesCloudflareWorkerToReadOnlyPreview(t *testing.T) {
 	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
 	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
 	fake := &cliCloudflareExecutor{results: []opsexec.Result{
-		{ExitCode: 0, Stdout: "4.35.0\n"},
+		{ExitCode: 0, Stdout: "4.107.0\n"},
 		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`},
 		{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`},
 		{ExitCode: 0, Stdout: "private dry-run output"},
@@ -55,7 +55,7 @@ func TestOpsDeployRoutesCloudflareWorkerToReadOnlyPreview(t *testing.T) {
 		{"--version"},
 		{"whoami", "--account", "0123456789abcdef0123456789abcdef", "--json"},
 		{"deployments", "status", "--json", "--config", "wrangler.jsonc"},
-		{"deploy", "--dry-run", "--config", "wrangler.jsonc"},
+		{"deploy", "--dry-run", "--outdir", ".agentops-production-bundle", "--config", "wrangler.jsonc"},
 	}
 	if len(fake.requests) != len(wantArgs) {
 		t.Fatalf("requests=%+v", fake.requests)
@@ -73,7 +73,7 @@ func TestOpsDeployDryRunFailureReportsSafeStageDiagnostics(t *testing.T) {
 	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
 	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
 	fake := &cliCloudflareExecutor{results: []opsexec.Result{
-		{ExitCode: 0, Stdout: "4.35.0\n", Duration: 5 * time.Millisecond},
+		{ExitCode: 0, Stdout: "4.107.0\n", Duration: 5 * time.Millisecond},
 		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`, Duration: 7 * time.Millisecond},
 		{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`},
 		{ExitCode: 1, Stdout: "private source output", Stderr: "token=private-token account=0123456789abcdef0123456789abcdef", Duration: 125 * time.Millisecond},
@@ -146,7 +146,7 @@ func TestOpsDeployPreviewReportsSuccessfulStageTimings(t *testing.T) {
 func TestOpsDeployPreviewUsesRepositoryScopeSnapshotForSiblingAssets(t *testing.T) {
 	p := opsTestPaths(t, "valid")
 	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
-	writeCLIFile(t, filepath.Join(sourcePath, "wrangler.jsonc"), `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","assets":{"directory":"../admin"}}`, 0o644)
+	writeCLIFile(t, filepath.Join(sourcePath, "wrangler.jsonc"), `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","main":"src/index.ts","compatibility_date":"2026-09-15","workers_dev":false,"preview_urls":false,"assets":{"directory":"../admin","binding":"ASSETS","not_found_handling":"single-page-application"}}`, 0o644)
 	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
 	fake := successfulCLICloudflareExecutor()
 	siblingVisible := false
@@ -224,7 +224,7 @@ func TestOpsDeployRejectsCloudflareProductionWriteWhileSecurityGateIsClosed(t *t
 	opsCloudflareExecutor = func() opsexec.Executor { return confirmedExecutor }
 	var stdout, stderr bytes.Buffer
 	confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
-	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "production writes are temporarily disabled") {
+	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "deployment apply failed") {
 		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
 	}
 	if hasCloudflareProductionDeploy(confirmedExecutor.requests) {
@@ -233,10 +233,6 @@ func TestOpsDeployRejectsCloudflareProductionWriteWhileSecurityGateIsClosed(t *t
 }
 
 func TestOpsDeployRejectsCloudflareInputDriftBeforeProductionCommand(t *testing.T) {
-	previousWritesEnabled := cloudflareProductionWritesEnabled
-	cloudflareProductionWritesEnabled = true
-	t.Cleanup(func() { cloudflareProductionWritesEnabled = previousWritesEnabled })
-
 	tests := []struct {
 		name          string
 		mutate        func(*testing.T, string)
@@ -262,7 +258,7 @@ func TestOpsDeployRejectsCloudflareInputDriftBeforeProductionCommand(t *testing.
 		{
 			name: "Wrangler config",
 			mutate: func(t *testing.T, root string) {
-				writeCLIFile(t, filepath.Join(root, "relay", "wrangler.jsonc"), `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","compatibility_date":"2026-09-14"}`, 0o644)
+				writeCLIFile(t, filepath.Join(root, "relay", "wrangler.jsonc"), `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","main":"src/index.ts","compatibility_date":"2026-09-14","workers_dev":false,"preview_urls":false}`, 0o644)
 			},
 			applyExecutor: successfulCLICloudflareExecutor,
 			wantError:     "stale",
@@ -272,7 +268,7 @@ func TestOpsDeployRejectsCloudflareInputDriftBeforeProductionCommand(t *testing.
 			mutate: func(*testing.T, string) {},
 			applyExecutor: func() *cliCloudflareExecutor {
 				return &cliCloudflareExecutor{results: []opsexec.Result{
-					{ExitCode: 0, Stdout: "4.35.0\n"},
+					{ExitCode: 0, Stdout: "4.107.0\n"},
 					{ExitCode: 0, Stdout: `{"accounts":[{"id":"ffffffffffffffffffffffffffffffff"}]}`},
 				}}
 			},
@@ -286,7 +282,7 @@ func TestOpsDeployRejectsCloudflareInputDriftBeforeProductionCommand(t *testing.
 				executor.results[0].Stdout = "4.36.0\n"
 				return executor
 			},
-			wantError: "stale",
+			wantError: "capability validation failed",
 		},
 		{
 			name: "ignored deployment input",
@@ -331,7 +327,7 @@ func TestOpsDeployRejectsCloudflareInputDriftBeforeProductionCommand(t *testing.
 
 func successfulCLICloudflareExecutor() *cliCloudflareExecutor {
 	return &cliCloudflareExecutor{results: []opsexec.Result{
-		{ExitCode: 0, Stdout: "4.35.0\n"},
+		{ExitCode: 0, Stdout: "4.107.0\n"},
 		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`},
 		{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`},
 		{ExitCode: 0, Stdout: "dry-run"},
@@ -465,12 +461,9 @@ func emergencyReportRoot(t *testing.T, parent string) string {
 func stubCLICloudflareExecutor(t *testing.T, executor opsexec.Executor) {
 	t.Helper()
 	previous := opsCloudflareExecutor
-	previousWritesEnabled := cloudflareProductionWritesEnabled
 	opsCloudflareExecutor = func() opsexec.Executor { return executor }
-	cloudflareProductionWritesEnabled = true
 	t.Cleanup(func() {
 		opsCloudflareExecutor = previous
-		cloudflareProductionWritesEnabled = previousWritesEnabled
 	})
 }
 
@@ -547,6 +540,16 @@ func (e *cliCloudflareExecutor) Run(_ context.Context, request opsexec.Request) 
 	}
 	result := e.results[0]
 	e.results = e.results[1:]
+	if result.ExitCode == 0 && result.Err == nil && !result.TimedOut {
+		for index, argument := range request.Args {
+			if argument == "--outdir" && index+1 < len(request.Args) {
+				writeBundlePath := filepath.Join(request.Directory, request.Args[index+1], "index.js")
+				if err := os.MkdirAll(filepath.Dir(writeBundlePath), 0o700); err == nil {
+					_ = os.WriteFile(writeBundlePath, []byte("export default { fetch() { return new Response('bundled') } }"), 0o600)
+				}
+			}
+		}
+	}
 	if e.afterRun != nil {
 		e.afterRun(request)
 	}
@@ -561,10 +564,10 @@ func newCLICloudflareRepository(t *testing.T) (string, string) {
 	t.Helper()
 	root := t.TempDir()
 	source := filepath.Join(root, "relay")
-	writeCLIFile(t, filepath.Join(source, "package.json"), `{"devDependencies":{"wrangler":"~4.35.0"}}`, 0o644)
+	writeCLIFile(t, filepath.Join(source, "package.json"), `{"devDependencies":{"wrangler":"~4.107.0"}}`, 0o644)
 	writeCLIFile(t, filepath.Join(source, "package-lock.json"), `{}`, 0o644)
 	writeCLIFile(t, filepath.Join(source, "node_modules", ".bin", "wrangler"), "#!/usr/bin/env node\n", 0o755)
-	writeCLIFile(t, filepath.Join(source, "wrangler.jsonc"), `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef"}`, 0o644)
+	writeCLIFile(t, filepath.Join(source, "wrangler.jsonc"), `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","main":"src/index.ts","compatibility_date":"2026-09-15","workers_dev":false,"preview_urls":false}`, 0o644)
 	writeCLIFile(t, filepath.Join(source, "src", "index.ts"), "baseline\n", 0o644)
 	writeCLIFile(t, filepath.Join(root, "admin", "index.html"), "admin", 0o644)
 	writeCLIFile(t, filepath.Join(root, ".gitignore"), "relay/dist/\n", 0o644)
@@ -598,6 +601,7 @@ environments:
     worker: example-worker
     accountId: 0123456789abcdef0123456789abcdef
     wranglerConfig: wrangler.jsonc
+    apiProfile: wrangler-4.107-preveal-v1
     health:
       type: http
       url: https://example.test/health

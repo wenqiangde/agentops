@@ -125,7 +125,7 @@ func TestProductionDigestIsCanonicalAndExcludesCredentialBytes(t *testing.T) {
 func TestRollbackProductionDigestBindsTargetAndTrustedExecutionIdentity(t *testing.T) {
 	plan := opscloudflare.CloudflareRollbackPlan{
 		Service: "example-relay", Environment: "production", Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
-		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.35.0",
+		WranglerConfig: "wrangler.jsonc", WranglerConfigSHA256: strings.Repeat("1", 64), WranglerVersion: "4.107.0",
 		BaseCommit: strings.Repeat("2", 40), ScopeState: "clean", ScopeContentSHA256: strings.Repeat("3", 64), DeploymentInputSHA256: strings.Repeat("4", 64),
 		RequestedTargetID: "33333333-3333-4333-8333-333333333333", TargetVersionID: "33333333-3333-4333-8333-333333333333",
 		CurrentDeploymentID: "22222222-2222-4222-8222-222222222222", CurrentVersionIDs: []string{"11111111-1111-4111-8111-111111111111"}, TargetVerified: true,

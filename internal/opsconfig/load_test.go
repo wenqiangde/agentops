@@ -300,6 +300,7 @@ environments:
     worker: edge-relay
     accountId: 0123456789abcdef0123456789abcdef
     wranglerConfig: wrangler.jsonc
+    apiProfile: wrangler-4.107-preveal-v1
     health:
       type: http
       url: https://api.example.test/health
@@ -312,7 +313,7 @@ environments:
 		t.Fatalf("issues=%+v", issues)
 	}
 	production := inv.Services["edge-relay"].Environments[opsconfig.EnvironmentProduction]
-	if production.Kind != opsconfig.EnvironmentKindCloudflareWorkers || production.Worker != "edge-relay" || production.AccountID != "0123456789abcdef0123456789abcdef" || production.WranglerConfig != "wrangler.jsonc" {
+	if production.Kind != opsconfig.EnvironmentKindCloudflareWorkers || production.Worker != "edge-relay" || production.AccountID != "0123456789abcdef0123456789abcdef" || production.WranglerConfig != "wrangler.jsonc" || production.APIProfile != "wrangler-4.107-preveal-v1" {
 		t.Fatalf("production=%+v", production)
 	}
 	loaded := inv.Services["edge-relay"]
@@ -447,6 +448,7 @@ environments:
     worker: edge-relay
     accountId: 0123456789abcdef0123456789abcdef
     wranglerConfig: wrangler.jsonc
+    apiProfile: wrangler-4.107-preveal-v1
 `
 }
 

@@ -35,7 +35,7 @@ func TestCreatePlanOnlyReadsIdentityAndRunsWranglerDryRun(t *testing.T) {
 	sourcePath := newCloudflareProject(t)
 	accountID := "0123456789abcdef0123456789abcdef"
 	executor := &recordingExecutor{results: []opsexec.Result{
-		{ExitCode: 0, Stdout: "4.35.0\n"},
+		{ExitCode: 0, Stdout: "4.107.0\n"},
 		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`},
 		{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}`},
 		{ExitCode: 0, Stdout: "dry-run output must not enter the plan"},
@@ -54,6 +54,7 @@ func TestCreatePlanOnlyReadsIdentityAndRunsWranglerDryRun(t *testing.T) {
 			SourcePath: sourcePath, Worker: "example-worker", AccountID: accountID,
 			WranglerConfig: "wrangler.jsonc", Timeout: 5 * time.Second,
 		},
+		APIProfile: "wrangler-4.107-preveal-v1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +76,7 @@ func TestCreatePlanOnlyReadsIdentityAndRunsWranglerDryRun(t *testing.T) {
 		},
 		{
 			Program:   "node_modules/.bin/wrangler",
-			Args:      []string{"deploy", "--dry-run", "--config", "wrangler.jsonc"},
+			Args:      []string{"deploy", "--dry-run", "--outdir", ".agentops-production-bundle", "--config", "wrangler.jsonc"},
 			Directory: sourcePath, Timeout: 5 * time.Second,
 		},
 	}
@@ -96,8 +97,8 @@ func TestCloudflareDeployPlanDigestTracksTypedInputs(t *testing.T) {
 	root := newCloudflareProject(t)
 	writeFile(t, filepath.Join(root, "wrangler.jsonc"), `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef"}`, 0o644)
 	base := samplePlanRequest(root)
-	baseline := createPlanDigest(t, base, "4.35.0", "first dry-run output")
-	if repeated := createPlanDigest(t, base, "4.35.0", "different raw dry-run output"); repeated != baseline {
+	baseline := createPlanDigest(t, base, "4.107.0", "first dry-run output")
+	if repeated := createPlanDigest(t, base, "4.107.0", "different raw dry-run output"); repeated != baseline {
 		t.Fatalf("identical typed input produced unstable digest: first=%s repeated=%s", baseline, repeated)
 	}
 
@@ -133,7 +134,7 @@ func TestCloudflareDeployPlanDigestTracksTypedInputs(t *testing.T) {
 				writeFile(t, filepath.Join(root, "wrangler.jsonc"), `{"name":"other-worker","account_id":"0123456789abcdef0123456789abcdef"}`, 0o644)
 			},
 		},
-		{name: "Wrangler version", version: "4.36.0"},
+		{name: "Wrangler version", version: "4.107.1"},
 		{
 			name: "base commit",
 			mutate: func(request *opscloudflare.PlanRequest) {
@@ -159,7 +160,7 @@ func TestCloudflareDeployPlanDigestTracksTypedInputs(t *testing.T) {
 			}
 			version := tt.version
 			if version == "" {
-				version = "4.35.0"
+				version = "4.107.0"
 			}
 			if changed := createPlanDigest(t, request, version, "dry-run output"); changed == baseline {
 				t.Fatalf("%s did not change digest", tt.name)
@@ -183,6 +184,7 @@ func samplePlanRequest(sourcePath string) opscloudflare.PlanRequest {
 			AccountID: "0123456789abcdef0123456789abcdef", WranglerConfig: "wrangler.jsonc",
 			Timeout: 5 * time.Second,
 		},
+		APIProfile: "wrangler-4.107-preveal-v1",
 	}
 }
 
