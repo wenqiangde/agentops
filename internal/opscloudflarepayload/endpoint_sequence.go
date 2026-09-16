@@ -3,6 +3,7 @@ package opscloudflarepayload
 import (
 	"encoding/json"
 	"errors"
+	"sort"
 )
 
 const (
@@ -24,10 +25,18 @@ func EndpointSequence(request Request) ([]string, error) {
 	if json.Unmarshal(request.Payload.Metadata, &config) != nil || config.validate() != nil || !sdkProfileSupported(config, request.Payload) {
 		return nil, errors.New("Cloudflare endpoint sequence profile is invalid")
 	}
-	if request.ExpectedDeploymentID == "" || len(request.ExpectedVersionIDs) == 0 {
+	if request.ExpectedDeploymentID == "" || !uniqueNonEmptyValues(request.ExpectedVersionIDs) {
 		return nil, errors.New("Cloudflare endpoint sequence deployment identity is invalid")
 	}
 	sequence := []string{endpointDomainsRead, endpointSchedulesRead, endpointCurrentDeploymentRead}
+	if len(config.Migrations) > 0 {
+		versionIDs := append([]string(nil), request.ExpectedVersionIDs...)
+		sort.Strings(versionIDs)
+		for _, versionID := range versionIDs {
+			sequence = append(sequence, "current-version-detail-read-"+versionID)
+		}
+		sequence = append(sequence, endpointCurrentDeploymentRead)
+	}
 	if len(request.Payload.Assets) > 0 {
 		sequence = append(sequence, endpointAssetSession, endpointAssetUpload)
 	}

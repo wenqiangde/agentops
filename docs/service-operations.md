@@ -310,6 +310,17 @@ or deployment identity drift, timeout, or malformed response fails before a
 write. Deploy and rollback both retain a separate post-write deployment
 identity readback.
 
+When the canonical profile contains Durable Object migrations, confirmation
+also binds the complete ordered local history, the `ordered-history-v1`
+derivation policy, the allowed remote-state classes, and one sorted version
+detail read per confirmed active version. After confirmation, the trusted SDK
+requires every active version to expose the same absent, null, or known local
+migration tag, derives only the pending suffix, and repeats the deployment
+identity read before its first write. Unknown, empty, divergent, or mismatched
+state fails closed. One pending step uses the typed single-step API; multiple
+steps use the ordered multi-step API; an already-current Worker omits migration
+metadata. The no-assets upload path does not accept migrations.
+
 An external-stage failure prints the same bounded fields as a single diagnostic
 line. It never includes raw Wrangler stdout/stderr, tokens, the complete account
 ID, source content, or arbitrary command details. Each external stage receives
@@ -328,8 +339,14 @@ project files. SSH deployment and rollback are unaffected.
 The `wrangler-4.107-preveal-v1` profile accepts only stable Wrangler `4.107.x`
 versions. Earlier, later, prerelease, or otherwise mismatched versions fail
 before dry-run output can become a production payload. Wrangler writes its
-bundled Worker into the controlled snapshot output directory; AgentOps captures
-exactly one generated JavaScript module plus approved assets into owned memory.
+bundled Worker into the controlled snapshot output directory. This profile is
+deliberately narrower than general Wrangler module rules: AgentOps captures
+exactly one generated JavaScript main module, zero or more generated WASM
+modules, and approved assets into owned memory. Text, data, CommonJS, Python,
+and other Wrangler module kinds are unsupported by this profile and fail closed.
+Wrangler's root `README.md` and the main module's matching `.map` are local
+dry-run metadata and are not uploaded because this profile does not enable
+source-map upload.
 It never substitutes the configured TypeScript or JavaScript source entry for
 the generated bundle. Symlinks, missing bundles, ambiguous multiple modules,
 and unsupported output files fail closed. The temporary bundle directory is

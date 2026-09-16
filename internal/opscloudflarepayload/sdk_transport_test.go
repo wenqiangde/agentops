@@ -1,15 +1,21 @@
 package opscloudflarepayload
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/cloudflare/cloudflare-go/v7/workers"
 )
 
 func TestSDKProductionTransportUploadsRequestedAssetsBeforeVersion(t *testing.T) {
@@ -96,6 +102,7 @@ func TestSDKProductionTransportUploadsRequestedAssetsBeforeVersion(t *testing.T)
 
 func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testing.T) {
 	var paths []string
+	wasmVerified := false
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		paths = append(paths, request.Method+" "+request.URL.Path)
 		if writeEmptyEndpointRead(response, request) {
@@ -116,6 +123,7 @@ func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testin
 			if !strings.Contains(string(body), "approved module") || !strings.Contains(string(body), "worker.mjs") {
 				t.Fatalf("version upload missing owned module: %s", body)
 			}
+			wasmVerified = multipartContainsModule(t, request.Header.Get("Content-Type"), body, "image.wasm", "application/wasm", []byte("wasm-bytes"))
 			response.Header().Set("Content-Type", "application/json")
 			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"11111111-1111-4111-8111-111111111111","resources":{}}}`))
 		case 2:
@@ -135,7 +143,10 @@ func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testin
 
 	payload, err := NewPayload(
 		"worker.mjs",
-		[]Module{{Name: "worker.mjs", Type: "application/javascript+module", Bytes: []byte("approved module")}},
+		[]Module{
+			{Name: "worker.mjs", Type: "application/javascript+module", Bytes: []byte("approved module")},
+			{Name: "image.wasm", Type: "application/wasm", Bytes: []byte("wasm-bytes")},
+		},
 		nil,
 		[]byte(`{"profile":"wrangler-4.107-preveal-v1","name":"worker","account_id":"account","main":"worker.mjs","compatibility_date":"2026-09-15","workers_dev":false,"preview_urls":false}`),
 	)
@@ -161,8 +172,69 @@ func TestSDKProductionTransportUsesTypedVersionThenDeploymentEndpoints(t *testin
 	if strings.Join(paths, "\n") != strings.Join(wantPaths, "\n") {
 		t.Fatalf("endpoint sequence=%v want=%v", paths, wantPaths)
 	}
+	if !wasmVerified {
+		t.Fatal("multipart version upload did not preserve the owned WASM module")
+	}
 	if evidence.ClientVersion != "cloudflare-go/v7.7.0" || evidence.RequestID != "22222222-2222-4222-8222-222222222222" || evidence.InputSHA256 != payload.SHA256 {
 		t.Fatalf("unexpected evidence: %#v", evidence)
+	}
+}
+
+func multipartContainsModule(t *testing.T, contentType string, body []byte, filename, moduleType string, content []byte) bool {
+	t.Helper()
+	_, parameters, err := mime.ParseMediaType(contentType)
+	if err != nil || parameters["boundary"] == "" {
+		t.Errorf("invalid multipart content type %q: %v", contentType, err)
+		return false
+	}
+	reader := multipart.NewReader(bytes.NewReader(body), parameters["boundary"])
+	for {
+		part, nextErr := reader.NextPart()
+		if nextErr == io.EOF {
+			return false
+		}
+		if nextErr != nil {
+			t.Errorf("read multipart request: %v", nextErr)
+			return false
+		}
+		partBytes, readErr := io.ReadAll(part)
+		if readErr != nil {
+			t.Errorf("read multipart part: %v", readErr)
+			return false
+		}
+		if part.FileName() == filename {
+			return part.Header.Get("Content-Type") == moduleType && bytes.Equal(partBytes, content)
+		}
+	}
+}
+
+func TestVersionParamPreservesWASMModuleIdentityAndBytes(t *testing.T) {
+	config := CanonicalConfig{Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
+	payload, err := NewPayload(
+		"worker.mjs",
+		[]Module{
+			{Name: "worker.mjs", Type: "application/javascript+module", Bytes: []byte("approved module")},
+			{Name: "image.wasm", Type: "application/wasm", Bytes: []byte("wasm-bytes")},
+		},
+		nil,
+		[]byte(`{"profile":"wrangler-4.107-preveal-v1","name":"worker","account_id":"account","main":"worker.mjs","compatibility_date":"2026-09-15","workers_dev":false,"preview_urls":false}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	param, err := versionParamFor(config, payload, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(param)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(encoded)
+	for _, required := range []string{"image.wasm", "application/wasm", "d2FzbS1ieXRlcw=="} {
+		if !strings.Contains(body, required) {
+			t.Fatalf("version parameter missing %q: %s", required, body)
+		}
 	}
 }
 
@@ -343,6 +415,328 @@ func TestEndpointSequenceRequiresEmptyRemoteStateReads(t *testing.T) {
 	if err != nil || strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("empty endpoint policy sequence=%v want=%v err=%v", got, want, err)
 	}
+}
+
+func TestEndpointSequenceBindsSortedMigrationVersionReadsAndSecondDeploymentCheck(t *testing.T) {
+	config := CanonicalConfig{
+		Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15",
+		Assets: &AssetsConfig{Binding: "ASSETS", RunWorkerFirst: true, NotFoundHandling: "single-page-application"},
+		Migrations: []Migration{
+			{Tag: "v1", NewSQLiteClasses: []string{"FirstDO"}},
+			{Tag: "v2", NewSQLiteClasses: []string{"SecondDO"}},
+		},
+	}
+	payload := payloadForConfig(t, config, []Asset{{Path: "index.html", Bytes: []byte("approved")}})
+	request, err := NewRequest(
+		"account", "worker", "11111111-1111-4111-8111-111111111111",
+		[]string{"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+		payload.SHA256, payload, time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		endpointDomainsRead,
+		endpointSchedulesRead,
+		endpointCurrentDeploymentRead,
+		"current-version-detail-read-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"current-version-detail-read-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+		endpointCurrentDeploymentRead,
+		endpointAssetSession,
+		endpointAssetUpload,
+		endpointVersionCreate,
+		endpointDeploymentCreate,
+		endpointIdentityRead,
+	}
+	got, err := EndpointSequence(request)
+	if err != nil || strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("migration endpoint sequence=%v want=%v err=%v", got, want, err)
+	}
+}
+
+func TestEndpointSequenceRejectsDuplicateVersionIDsDefensively(t *testing.T) {
+	config := CanonicalConfig{
+		Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15",
+		Assets:     &AssetsConfig{Binding: "ASSETS", RunWorkerFirst: true, NotFoundHandling: "single-page-application"},
+		Migrations: []Migration{{Tag: "v1", NewSQLiteClasses: []string{"FirstDO"}}},
+	}
+	payload := payloadForConfig(t, config, []Asset{{Path: "index.html", Bytes: []byte("approved")}})
+	request := Request{
+		AccountID: "account", Worker: "worker", ExpectedDeploymentID: "11111111-1111-4111-8111-111111111111",
+		ExpectedVersionIDs: []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+		ExpectedSHA256:     payload.SHA256, Payload: payload, Timeout: time.Second,
+	}
+	if sequence, err := EndpointSequence(request); err == nil {
+		t.Fatalf("duplicate version IDs entered endpoint sequence: %v", sequence)
+	}
+}
+
+func TestEndpointSequenceRejectsNoAssetsWithMigrationHistory(t *testing.T) {
+	config := CanonicalConfig{
+		Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15",
+		Migrations: []Migration{{Tag: "v1", NewSQLiteClasses: []string{"FirstDO"}}},
+	}
+	payload := payloadForConfig(t, config, nil)
+	request, err := NewRequest(
+		"account", "worker", "11111111-1111-4111-8111-111111111111",
+		[]string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sequence, err := EndpointSequence(request); err == nil {
+		t.Fatalf("no-assets migration history entered production sequence: %v", sequence)
+	}
+}
+
+func TestSDKProductionTransportRejectsUnknownMigrationTagBeforeAnyWrite(t *testing.T) {
+	request := migrationTransportRequest(t)
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, httpRequest *http.Request) {
+		methods = append(methods, httpRequest.Method+" "+httpRequest.URL.Path)
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(httpRequest.URL.Path, "/workers/domains"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[]}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/schedules"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"schedules":[]}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/deployments"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/versions/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","resources":{"script_runtime":{"migration_tag":"v9"}}}}`))
+		default:
+			t.Fatalf("unexpected request %s", httpRequest.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	evidence, err := newSDKProductionTransport(server.URL+"/").Deploy(context.Background(), []byte("bounded-test-token"), request)
+	if err == nil {
+		t.Fatal("unknown remote migration tag was accepted")
+	}
+	if !reflect.DeepEqual(evidence.ObservedMigrations, []MigrationObservationEvidence{{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "value", Tag: "v9"}}) || evidence.RemoteWritePossible {
+		t.Fatalf("bounded migration evidence=%+v", evidence)
+	}
+	want := []string{
+		"GET /accounts/account/workers/domains",
+		"GET /accounts/account/workers/scripts/worker/schedules",
+		"GET /accounts/account/workers/scripts/worker/deployments",
+		"GET /accounts/account/workers/scripts/worker/versions/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+	}
+	if !reflect.DeepEqual(methods, want) {
+		t.Fatalf("requests=%v want=%v", methods, want)
+	}
+}
+
+func TestMigrationObservationClassifiesInvalidStringTagForSafeReporting(t *testing.T) {
+	versionID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	version := &workers.ScriptVersionGetResponse{ID: versionID}
+	version.Resources.ScriptRuntime.MigrationTag = strings.Repeat("a", 129)
+	_, evidence, err := migrationObservation(versionID, version)
+	if err == nil {
+		t.Fatal("invalid string migration tag was accepted")
+	}
+	if evidence.State != "invalid" || evidence.Tag != "" {
+		t.Fatalf("invalid tag was not converted to report-safe evidence: %+v", evidence)
+	}
+}
+
+func TestSDKProductionTransportRejectsInvalidStringMigrationTagWithReportSafeEvidence(t *testing.T) {
+	request := migrationTransportRequest(t)
+	var methods []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, httpRequest *http.Request) {
+		methods = append(methods, httpRequest.Method+" "+httpRequest.URL.Path)
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(httpRequest.URL.Path, "/workers/domains"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[]}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/schedules"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"schedules":[]}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/deployments"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/versions/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","resources":{"script_runtime":{"migration_tag":"` + strings.Repeat("a", 129) + `"}}}}`))
+		default:
+			t.Fatalf("unexpected request %s", httpRequest.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	evidence, err := newSDKProductionTransport(server.URL+"/").Deploy(context.Background(), []byte("bounded-test-token"), request)
+	if err == nil {
+		t.Fatal("invalid remote migration tag was accepted")
+	}
+	if !reflect.DeepEqual(evidence.ObservedMigrations, []MigrationObservationEvidence{{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "invalid"}}) || evidence.RemoteWritePossible {
+		t.Fatalf("report-safe invalid migration evidence=%+v", evidence)
+	}
+	for _, method := range methods {
+		if strings.HasPrefix(method, "POST ") {
+			t.Fatalf("invalid migration tag reached a write: %v", methods)
+		}
+	}
+}
+
+func TestSDKProductionTransportPreservesPartialTypedMigrationEvidence(t *testing.T) {
+	request := migrationTransportRequest(t)
+	request.ExpectedVersionIDs = []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, httpRequest *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(httpRequest.URL.Path, "/workers/domains"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[]}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/schedules"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"schedules":[]}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/deployments"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":50},{"version_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","percentage":50}]}]}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/versions/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","resources":{"script_runtime":{"migration_tag":null}}}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/versions/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":null}`))
+		}
+	}))
+	defer server.Close()
+	evidence, err := newSDKProductionTransport(server.URL+"/").Deploy(context.Background(), []byte("bounded-test-token"), request)
+	if err == nil {
+		t.Fatal("partial migration read was accepted")
+	}
+	want := []MigrationObservationEvidence{
+		{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "null"},
+		{VersionID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", State: "invalid"},
+	}
+	if !reflect.DeepEqual(evidence.ObservedMigrations, want) || evidence.RemoteWritePossible {
+		t.Fatalf("partial evidence=%+v want=%+v", evidence.ObservedMigrations, want)
+	}
+}
+
+func TestSDKProductionTransportRejectsMixedAbsentAndNullMigrationStateBeforeWrite(t *testing.T) {
+	request := migrationTransportRequest(t)
+	request.ExpectedVersionIDs = []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"}
+	var methods []string
+	deploymentReads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, httpRequest *http.Request) {
+		methods = append(methods, httpRequest.Method+" "+httpRequest.URL.Path)
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(httpRequest.URL.Path, "/workers/domains"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[]}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/schedules"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"schedules":[]}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/deployments"):
+			deploymentReads++
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":50},{"version_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","percentage":50}]}]}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/versions/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","resources":{"script_runtime":{}}}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/versions/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","resources":{"script_runtime":{"migration_tag":null}}}}`))
+		default:
+			response.WriteHeader(http.StatusBadRequest)
+			_, _ = response.Write([]byte(`{"success":false,"errors":[{"message":"unexpected write"}],"messages":[],"result":null}`))
+		}
+	}))
+	defer server.Close()
+
+	evidence, err := newSDKProductionTransport(server.URL+"/").Deploy(context.Background(), []byte("bounded-test-token"), request)
+	if err == nil {
+		t.Fatal("mixed absent/null migration state was accepted")
+	}
+	want := []MigrationObservationEvidence{
+		{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "absent"},
+		{VersionID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", State: "null"},
+	}
+	if !reflect.DeepEqual(evidence.ObservedMigrations, want) || evidence.RemoteWritePossible || deploymentReads != 1 {
+		t.Fatalf("mixed state crossed write boundary: evidence=%+v reads=%d methods=%v", evidence, deploymentReads, methods)
+	}
+	for _, method := range methods {
+		if strings.HasPrefix(method, "POST ") {
+			t.Fatalf("mixed migration state reached a write: %v", methods)
+		}
+	}
+}
+
+func TestSDKProductionTransportReportsMigrationMetadataOmittedWithoutHistory(t *testing.T) {
+	config := CanonicalConfig{Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15"}
+	payload := payloadForConfig(t, config, nil)
+	request, err := NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, httpRequest *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(httpRequest.URL.Path, "/workers/domains"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[]}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/schedules"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"schedules":[]}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/deployments"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"22222222-2222-4222-8222-222222222222","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]}}`))
+		}
+	}))
+	defer server.Close()
+	evidence, _ := newSDKProductionTransport(server.URL+"/").Deploy(context.Background(), []byte("bounded-test-token"), request)
+	if !evidence.MigrationOmitted {
+		t.Fatal("omitted migration metadata was reported as present")
+	}
+}
+
+func TestSDKProductionTransportRechecksDeploymentAfterMigrationReadsBeforeAnyWrite(t *testing.T) {
+	request := migrationTransportRequest(t)
+	var methods []string
+	deploymentReads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, httpRequest *http.Request) {
+		methods = append(methods, httpRequest.Method+" "+httpRequest.URL.Path)
+		response.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(httpRequest.URL.Path, "/workers/domains"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":[]}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/schedules"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"schedules":[]}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/deployments"):
+			deploymentReads++
+			deploymentID := "11111111-1111-4111-8111-111111111111"
+			if deploymentReads == 2 {
+				deploymentID = "22222222-2222-4222-8222-222222222222"
+			}
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"deployments":[{"id":"` + deploymentID + `","versions":[{"version_id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","percentage":100}]}]}}`))
+		case strings.HasSuffix(httpRequest.URL.Path, "/versions/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"):
+			_, _ = response.Write([]byte(`{"success":true,"errors":[],"messages":[],"result":{"id":"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa","resources":{"script_runtime":{"migration_tag":"v1"}}}}`))
+		default:
+			t.Fatalf("unexpected request %s", httpRequest.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	if _, err := newSDKProductionTransport(server.URL+"/").Deploy(context.Background(), []byte("bounded-test-token"), request); err == nil {
+		t.Fatal("deployment drift after migration reads was accepted")
+	}
+	if deploymentReads != 2 {
+		t.Fatalf("deployment reads=%d requests=%v", deploymentReads, methods)
+	}
+	for _, method := range methods {
+		if strings.HasPrefix(method, "POST ") {
+			t.Fatalf("deployment drift reached write request: %v", methods)
+		}
+	}
+}
+
+func migrationTransportRequest(t *testing.T) Request {
+	t.Helper()
+	config := CanonicalConfig{
+		Profile: supportedProfile, Name: "worker", AccountID: "account", Main: "worker.mjs", CompatibilityDate: "2026-09-15",
+		Assets: &AssetsConfig{Binding: "ASSETS", RunWorkerFirst: true, NotFoundHandling: "single-page-application"},
+		Migrations: []Migration{
+			{Tag: "v1", NewSQLiteClasses: []string{"FirstDO"}},
+			{Tag: "v2", NewSQLiteClasses: []string{"SecondDO"}},
+		},
+	}
+	payload := payloadForConfig(t, config, []Asset{{Path: "index.html", Bytes: []byte("approved")}})
+	request, err := NewRequest(
+		"account", "worker", "11111111-1111-4111-8111-111111111111",
+		[]string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return request
 }
 
 func TestSDKProductionTransportRejectsChangedCurrentDeploymentBeforeAnyWrite(t *testing.T) {
@@ -687,6 +1081,49 @@ func TestSDKProductionTransportMapsCompleteRelayVersionFields(t *testing.T) {
 		if !strings.Contains(string(body), required) {
 			t.Fatalf("version metadata missing %s: %s", required, body)
 		}
+	}
+}
+
+func TestVersionParamMapsDerivedMigrationSuffix(t *testing.T) {
+	config, payload := completeRelayFixture(t)
+	config.Migrations = []Migration{
+		{Tag: "v1", NewSQLiteClasses: []string{"FirstDO"}},
+		{Tag: "v2", NewSQLiteClasses: []string{"SecondDO"}},
+	}
+	version, err := versionParamForDecision(config, payload, "completion-jwt", migrationDecision{
+		OldTag: "v1", OldTagPresent: true, NewTag: "v2", Steps: config.Migrations[1:],
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{`"old_tag":"v1"`, `"new_tag":"v2"`, `"new_sqlite_classes":["SecondDO"]`} {
+		if !strings.Contains(string(body), required) {
+			t.Fatalf("derived single-step migration missing %s: %s", required, body)
+		}
+	}
+
+	version, err = versionParamForDecision(config, payload, "completion-jwt", migrationDecision{
+		NewTag: "v2", Steps: config.Migrations,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = json.Marshal(version)
+	if !strings.Contains(string(body), `"steps":[`) || strings.Contains(string(body), `"old_tag"`) {
+		t.Fatalf("derived multi-step migration is invalid: %s", body)
+	}
+
+	version, err = versionParamForDecision(config, payload, "completion-jwt", migrationDecision{Omit: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = json.Marshal(version)
+	if strings.Contains(string(body), `"migrations"`) {
+		t.Fatalf("latest migration state was not omitted: %s", body)
 	}
 }
 

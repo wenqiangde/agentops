@@ -32,6 +32,30 @@ func TestBuildPayloadOwnsConfiguredModuleAssetsAndCanonicalMetadata(t *testing.T
 	}
 }
 
+func TestBuildPayloadClassifiesWranglerJavaScriptAndWASMModules(t *testing.T) {
+	root := t.TempDir()
+	writePayloadFixture(t, root, "wrangler.jsonc", `{"name":"example-worker","account_id":"0123456789abcdef0123456789abcdef","main":"src/index.ts","compatibility_date":"2026-09-15","workers_dev":false,"preview_urls":false}`)
+	writePayloadFixture(t, root, "src/index.ts", "raw source")
+	writePayloadFixture(t, root, ".agentops-production-bundle/README.md", "Wrangler generated output")
+	writePayloadFixture(t, root, ".agentops-production-bundle/index.js", "import module from './image.wasm'; export default module;")
+	writePayloadFixture(t, root, ".agentops-production-bundle/index.js.map", `{"version":3}`)
+	writePayloadFixture(t, root, ".agentops-production-bundle/image.wasm", "wasm-bytes")
+
+	payload, _, err := opscloudflarepayload.BuildPayload(root, "wrangler.jsonc", ".agentops-production-bundle", "wrangler-4.107-preveal-v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.MainModule != "index.js" || len(payload.Modules) != 2 {
+		t.Fatalf("main=%q modules=%+v", payload.MainModule, payload.Modules)
+	}
+	if payload.Modules[0].Name != "image.wasm" || payload.Modules[0].Type != "application/wasm" || string(payload.Modules[0].Bytes) != "wasm-bytes" {
+		t.Fatalf("wasm module=%+v", payload.Modules[0])
+	}
+	if payload.Modules[1].Name != "index.js" || payload.Modules[1].Type != "application/javascript+module" {
+		t.Fatalf("javascript module=%+v", payload.Modules[1])
+	}
+}
+
 func TestBuildPayloadRejectsMissingOrAmbiguousWranglerBundle(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -40,7 +64,8 @@ func TestBuildPayloadRejectsMissingOrAmbiguousWranglerBundle(t *testing.T) {
 		{name: "missing", files: nil},
 		{name: "multiple modules", files: map[string]string{"index.js": "one", "second.mjs": "two"}},
 		{name: "raw source only", files: map[string]string{"index.ts": "raw source"}},
-		{name: "source map", files: map[string]string{"index.js": "bundled", "index.js.map": "{}"}},
+		{name: "unexpected source map", files: map[string]string{"index.js": "bundled", "other.js.map": "{}"}},
+		{name: "unexpected metadata", files: map[string]string{"index.js": "bundled", "manifest.json": "{}"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()

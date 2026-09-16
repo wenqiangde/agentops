@@ -38,13 +38,16 @@ func BuildPayload(root, configPath, bundleDirectory, profile string) (Payload, C
 	if err != nil {
 		return Payload{}, CanonicalConfig{}, err
 	}
-	mainPath, mainName, err := findBundledMain(root, bundleDirectory)
+	_, mainName, bundledModules, err := findBundledModules(root, bundleDirectory)
 	if err != nil {
 		return Payload{}, CanonicalConfig{}, err
 	}
 	config.Main = mainName
 
-	paths := []string{mainPath}
+	paths := make([]string, 0, len(bundledModules))
+	for _, module := range bundledModules {
+		paths = append(paths, module.path)
+	}
 	base := filepath.Dir(configPath)
 	assetNames := make([]string, 0)
 	assetDirectory := ""
@@ -88,9 +91,13 @@ func BuildPayload(root, configPath, bundleDirectory, profile string) (Payload, C
 	if err != nil {
 		return Payload{}, CanonicalConfig{}, err
 	}
-	mainBytes, ok := captured.File(mainPath)
-	if !ok {
-		return Payload{}, CanonicalConfig{}, errors.New("Cloudflare payload main module is unavailable")
+	modules := make([]Module, 0, len(bundledModules))
+	for _, bundled := range bundledModules {
+		content, found := captured.File(bundled.path)
+		if !found {
+			return Payload{}, CanonicalConfig{}, errors.New("Cloudflare payload module is unavailable")
+		}
+		modules = append(modules, Module{Name: bundled.name, Type: bundled.contentType, Bytes: content})
 	}
 	assets := make([]Asset, 0, len(assetNames))
 	if config.Assets != nil {
@@ -107,16 +114,23 @@ func BuildPayload(root, configPath, bundleDirectory, profile string) (Payload, C
 	if err != nil {
 		return Payload{}, CanonicalConfig{}, err
 	}
-	payload, err := NewPayload(mainName, []Module{{Name: mainName, Type: "application/javascript+module", Bytes: mainBytes}}, assets, metadata)
+	payload, err := NewPayload(mainName, modules, assets, metadata)
 	if err != nil {
 		return Payload{}, CanonicalConfig{}, err
 	}
 	return payload, config, nil
 }
 
-func findBundledMain(root, bundleDirectory string) (string, string, error) {
+type bundledModule struct {
+	path        string
+	name        string
+	contentType string
+}
+
+func findBundledModules(root, bundleDirectory string) (string, string, []bundledModule, error) {
 	bundleRoot := filepath.Join(root, bundleDirectory)
-	var candidates []string
+	var candidates []bundledModule
+	var ignored []string
 	err := filepath.WalkDir(bundleRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return errors.New("Cloudflare Wrangler bundle is unavailable")
@@ -130,28 +144,47 @@ func findBundledMain(root, bundleDirectory string) (string, string, error) {
 		if !entry.Type().IsRegular() {
 			return errors.New("Cloudflare Wrangler bundle must contain regular files")
 		}
-		extension := strings.ToLower(filepath.Ext(entry.Name()))
-		if extension != ".js" && extension != ".mjs" {
-			return errors.New("Cloudflare Wrangler bundle contains an unsupported output")
-		}
 		relative, relativeErr := filepath.Rel(root, path)
 		if relativeErr != nil || !validRelativePayloadPath(relative) {
 			return errors.New("Cloudflare Wrangler bundle path is invalid")
 		}
-		candidates = append(candidates, relative)
+		name, nameErr := filepath.Rel(bundleRoot, path)
+		if nameErr != nil || !validRelativePayloadPath(name) {
+			return errors.New("Cloudflare Wrangler bundle module name is invalid")
+		}
+		extension := strings.ToLower(filepath.Ext(entry.Name()))
+		switch extension {
+		case ".js", ".mjs":
+			candidates = append(candidates, bundledModule{path: relative, name: filepath.ToSlash(name), contentType: "application/javascript+module"})
+		case ".wasm":
+			candidates = append(candidates, bundledModule{path: relative, name: filepath.ToSlash(name), contentType: "application/wasm"})
+		case ".md", ".map":
+			ignored = append(ignored, filepath.ToSlash(name))
+		default:
+			return errors.New("Cloudflare Wrangler bundle contains an unsupported output")
+		}
 		return nil
 	})
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
-	if len(candidates) != 1 {
-		return "", "", errors.New("Cloudflare Wrangler bundle must contain exactly one JavaScript module")
+	var mainCandidates []bundledModule
+	for _, candidate := range candidates {
+		if candidate.contentType == "application/javascript+module" {
+			mainCandidates = append(mainCandidates, candidate)
+		}
 	}
-	name, err := filepath.Rel(bundleDirectory, candidates[0])
-	if err != nil || !validRelativePayloadPath(name) {
-		return "", "", errors.New("Cloudflare Wrangler bundle module name is invalid")
+	if len(mainCandidates) != 1 {
+		return "", "", nil, errors.New("Cloudflare Wrangler bundle must contain exactly one JavaScript module")
 	}
-	return candidates[0], filepath.ToSlash(name), nil
+	main := mainCandidates[0]
+	for _, name := range ignored {
+		if name != "README.md" && name != main.name+".map" {
+			return "", "", nil, errors.New("Cloudflare Wrangler bundle contains unsupported metadata")
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool { return candidates[i].name < candidates[j].name })
+	return main.path, main.name, candidates, nil
 }
 
 func validRelativePayloadPath(value string) bool {

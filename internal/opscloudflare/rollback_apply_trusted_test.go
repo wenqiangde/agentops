@@ -108,6 +108,31 @@ func TestApplyRollbackPreservesUnknownRemoteStateFromWriterError(t *testing.T) {
 	}
 }
 
+func TestApplyRollbackPreservesEvidenceWhenPostWriteIdentityIsInvalid(t *testing.T) {
+	plan := sampleCloudflareRollbackPlan()
+	request, err := opscloudflarepayload.NewRollbackRequest(plan.AccountID, plan.Worker, plan.TargetVersionID, plan.CurrentDeploymentID, plan.DeploymentInputSHA256, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := rollbackProductionIdentity()
+	digest, err := opscloudflare.RollbackProductionDigest(plan, request, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := opscloudflare.ConfirmProductionRollback(plan, request, identity, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordingRollbackWriter{evidence: opscloudflarepayload.Evidence{RemoteWritePossible: true, RequestID: "invalid-deployment-id", VersionIDs: []string{"invalid-version-id"}, InputSHA256: request.ExpectedSHA256}}
+	result, err := opscloudflare.ApplyRollback(context.Background(), writer, confirmed)
+	if err == nil {
+		t.Fatal("invalid post-write rollback identity was reported as success")
+	}
+	if !result.ProductionWriteSucceeded || result.DeploymentID != writer.evidence.RequestID || result.VersionID != writer.evidence.VersionIDs[0] {
+		t.Fatalf("rollback post-write evidence was lost: %+v", result)
+	}
+}
+
 func rollbackProductionIdentity() opscloudflare.ProductionConfirmationIdentity {
 	return opscloudflare.ProductionConfirmationIdentity{
 		APIProfile: "wrangler-4.107-preveal-v1", ClientVersion: "cloudflare-go/v7.7.0",

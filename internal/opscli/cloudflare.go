@@ -141,6 +141,8 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 	identity := opscloudflare.ProductionConfirmationIdentity{
 		APIProfile: production.APIProfile, ClientVersion: opscloudflarepayload.ProductionClientVersion,
 		EndpointSequence: endpointSequence, TokenProviderIdentity: cloudflareEnvironmentTokenProvider{}.Identity(),
+		MigrationDerivationAlgorithm: opscloudflarepayload.MigrationDerivationAlgorithm,
+		AllowedMigrationRemoteStates: opscloudflarepayload.AllowedMigrationRemoteStates(),
 	}
 	plan.Diagnostics = append([]opscloudflare.StageResult{gitStage, snapshotStage}, plan.Diagnostics...)
 	displayPlan := plan
@@ -185,10 +187,8 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 		}
 		result, err := opscloudflare.Apply(applyCtx, client, confirmed)
 		if err != nil || !result.Success {
-			if result.ProductionWriteSucceeded {
-				if reportErr := writeCloudflareApplyFailureReport(reportRoot, "cloudflare-deploy", digest, plan, result, started, time.Now().UTC(), stdout); reportErr != nil {
-					fmt.Fprintln(stderr, "agentops: production state unknown; audit persistence failed")
-				}
+			if reportErr := writeCloudflareApplyFailureReport(reportRoot, "cloudflare-deploy", digest, plan, result, started, time.Now().UTC(), stdout); reportErr != nil {
+				fmt.Fprintln(stderr, "agentops: Cloudflare audit persistence failed")
 			}
 			fmt.Fprintln(stdout, "deployment: failed")
 			fmt.Fprintln(stderr, "agentops: Cloudflare deployment apply failed")
@@ -201,7 +201,11 @@ func opsCloudflareDeploy(reportRoot string, service opsconfig.Service, productio
 			fmt.Fprintln(stderr, "agentops: Cloudflare deployment report identity failed")
 			return 1
 		}
-		report := cloudflareOperationReport(operationID, digest, plan, health, started, finished)
+		report, err := cloudflareOperationReport(operationID, digest, plan, result, health, started, finished)
+		if err != nil {
+			fmt.Fprintln(stderr, "agentops: production state unknown; audit report construction failed")
+			return 1
+		}
 		reportPath, err := writeCloudflareReport(reportRoot, report)
 		if err != nil {
 			fmt.Fprintln(stderr, "agentops: production state unknown; audit persistence failed")
@@ -253,15 +257,25 @@ func writeCloudflareApplyFailureReport(reportRoot, operationKind, digest string,
 	if err != nil {
 		return err
 	}
-	stage, err := opscloudflare.NewStageResult(opscloudflare.StageIdentityVerification, "CF_IDENTITY_UNAVAILABLE", finished.Sub(started), opscloudflare.TimeoutNone, opscloudflare.NewCorrelationID())
+	stageName := opscloudflare.StageIdentityVerification
+	stageCode := "CF_IDENTITY_UNAVAILABLE"
+	outcome := opsreport.CloudflareUnknownState
+	if !result.ProductionWriteSucceeded {
+		stageName = opscloudflare.StageProductionAction
+		stageCode = "CF_PRODUCTION_ACTION_REJECTED"
+		outcome = opsreport.CloudflareKnownFailure
+	}
+	stage, err := opscloudflare.NewStageResult(stageName, opscloudflare.StageCode(stageCode), finished.Sub(started), opscloudflare.TimeoutNone, opscloudflare.NewCorrelationID())
 	if err != nil {
 		return err
 	}
 	report, err := opsreport.NewCloudflareReport(opsreport.CloudflareReportInput{
 		OperationID: operationID, Operation: "deploy", Actor: "environment", Service: plan.Service, Environment: plan.Environment, Worker: plan.Worker,
 		PlanDigest: digest, PayloadDigest: plan.DeploymentInputSHA256, RequestedVersion: plan.RequestedVersion,
-		DeploymentID: result.DeploymentID, VersionIDs: append([]string(nil), result.VersionIDs...), Stages: []opscloudflare.StageResult{stage},
-		Outcome: opsreport.CloudflareUnknownState, Health: opsreport.HealthEvidence{Type: "http", State: "not-checked"}, ErrorCode: "CF_IDENTITY_UNAVAILABLE",
+		DeploymentID: opsreport.ReportSafeCloudflareFailureIdentifier(result.DeploymentID), VersionIDs: reportSafeCloudflareFailureIdentifiers(result.VersionIDs), Stages: []opscloudflare.StageResult{stage},
+		ObservedMigrations:   append([]opscloudflarepayload.MigrationObservationEvidence(nil), result.ObservedMigrations...),
+		PendingMigrationTags: append([]string(nil), result.PendingMigrationTags...), MigrationOmitted: result.MigrationOmitted,
+		Outcome: outcome, Health: opsreport.HealthEvidence{Type: "http", State: "not-checked"}, ErrorCode: stageCode,
 		StartedAt: started, FinishedAt: finished,
 	})
 	if err != nil {
@@ -275,32 +289,37 @@ func writeCloudflareApplyFailureReport(reportRoot, operationKind, digest string,
 	return nil
 }
 
-func cloudflareOperationReport(operationID, digest string, plan opscloudflare.CloudflareDeployPlan, health opshealth.Result, started, finished time.Time) opsreport.Report {
+func reportSafeCloudflareFailureIdentifiers(identifiers []string) []string {
+	result := make([]string, len(identifiers))
+	for index, identifier := range identifiers {
+		result[index] = opsreport.ReportSafeCloudflareFailureIdentifier(identifier)
+	}
+	return result
+}
+
+func cloudflareOperationReport(operationID, digest string, plan opscloudflare.CloudflareDeployPlan, result opscloudflare.ApplyResult, health opshealth.Result, started, finished time.Time) (opsreport.Report, error) {
 	state := "healthy"
-	errorSummary := ""
 	if !health.Healthy {
 		state = "failed"
-		errorSummary = "HTTP health check failed"
 	}
-	return opsreport.Report{
-		OperationID:      operationID,
-		Actor:            plan.AccountID,
-		Service:          plan.Service,
-		Environment:      plan.Environment,
-		Host:             plan.Worker,
-		PlanDigest:       digest,
-		RequestedVersion: plan.RequestedVersion,
-		ArtifactDigest:   plan.ScopeContentSHA256,
-		Steps: []opsreport.StepResult{
-			{Order: 1, Kind: "cloudflare-deploy", Status: "succeeded", StartedAt: started, FinishedAt: finished},
-			{Order: 2, Kind: "http-health", Status: state, StartedAt: started, FinishedAt: finished, Error: errorSummary},
-		},
-		Health:     opsreport.HealthEvidence{Type: health.Type, State: state, Healthy: health.Healthy, StatusCode: health.StatusCode, Detail: health.Detail},
-		Recovery:   "not-applicable",
-		Terminal:   true,
-		StartedAt:  started,
-		FinishedAt: finished,
-		Error:      errorSummary,
-		ManualWork: "none",
+	outcome := opsreport.CloudflareSucceeded
+	errorCode := ""
+	if !health.Healthy {
+		outcome = opsreport.CloudflareHealthFailure
+		errorCode = "CF_HEALTH_FAILED"
 	}
+	stage, err := opscloudflare.NewSuccessfulStageResult(opscloudflare.StageProductionAction, "CF_PRODUCTION_ACTION_OK", finished.Sub(started), opscloudflare.NewCorrelationID())
+	if err != nil {
+		return opsreport.Report{}, err
+	}
+	return opsreport.NewCloudflareReport(opsreport.CloudflareReportInput{
+		OperationID: operationID, Operation: "deploy", Actor: plan.AccountID, Service: plan.Service, Environment: plan.Environment, Worker: plan.Worker,
+		PlanDigest: digest, PayloadDigest: plan.DeploymentInputSHA256, RequestedVersion: plan.RequestedVersion,
+		DeploymentID: result.DeploymentID, VersionIDs: append([]string(nil), result.VersionIDs...),
+		ObservedMigrations:   append([]opscloudflarepayload.MigrationObservationEvidence(nil), result.ObservedMigrations...),
+		PendingMigrationTags: append([]string(nil), result.PendingMigrationTags...), MigrationOmitted: result.MigrationOmitted,
+		Stages: []opscloudflare.StageResult{stage}, Outcome: outcome,
+		Health:    opsreport.HealthEvidence{Type: health.Type, State: state, Healthy: health.Healthy, StatusCode: health.StatusCode, Detail: health.Detail},
+		ErrorCode: errorCode, StartedAt: started, FinishedAt: finished,
+	})
 }

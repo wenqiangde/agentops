@@ -25,6 +25,9 @@ type ApplyResult struct {
 	ProductionWriteSucceeded bool
 	DeploymentID             string
 	VersionIDs               []string
+	ObservedMigrations       []opscloudflarepayload.MigrationObservationEvidence
+	PendingMigrationTags     []string
+	MigrationOmitted         bool
 }
 
 var cloudflareUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
@@ -60,6 +63,7 @@ func ConfirmProduction(plan CloudflareDeployPlan, request opscloudflarepayload.R
 		return ConfirmedProductionPlan{}, errors.New("Cloudflare production request is invalid")
 	}
 	identity.EndpointSequence = append([]string(nil), identity.EndpointSequence...)
+	identity.AllowedMigrationRemoteStates = append([]string(nil), identity.AllowedMigrationRemoteStates...)
 	return ConfirmedProductionPlan{plan: plan, request: owned, identity: identity, digest: digest}, nil
 }
 
@@ -79,18 +83,29 @@ func Apply(ctx context.Context, writer DeploymentWriter, confirmed ConfirmedProd
 		return applyResultFromEvidence(evidence), errors.New("Cloudflare trusted deployment failed")
 	}
 	if !cloudflareUUIDPattern.MatchString(evidence.RequestID) || evidence.InputSHA256 != confirmed.request.ExpectedSHA256 || len(evidence.VersionIDs) != 1 || !cloudflareUUIDPattern.MatchString(evidence.VersionIDs[0]) {
-		return ApplyResult{ProductionWriteSucceeded: true}, errors.New("Cloudflare durable deployment identity is missing")
+		return applyResultFromEvidence(evidence), errors.New("Cloudflare durable deployment identity is missing")
 	}
-	return ApplyResult{Success: true, ProductionWriteSucceeded: true, DeploymentID: evidence.RequestID, VersionIDs: append([]string(nil), evidence.VersionIDs...)}, nil
+	return ApplyResult{
+		Success: true, ProductionWriteSucceeded: true, DeploymentID: evidence.RequestID,
+		VersionIDs:           append([]string(nil), evidence.VersionIDs...),
+		ObservedMigrations:   append([]opscloudflarepayload.MigrationObservationEvidence(nil), evidence.ObservedMigrations...),
+		PendingMigrationTags: append([]string(nil), evidence.PendingMigrationTags...),
+		MigrationOmitted:     evidence.MigrationOmitted,
+	}, nil
 }
 
 func applyResultFromEvidence(evidence opscloudflarepayload.Evidence) ApplyResult {
-	if !evidence.RemoteWritePossible {
-		return ApplyResult{}
-	}
-	return ApplyResult{
-		ProductionWriteSucceeded: true,
+	result := ApplyResult{
+		ProductionWriteSucceeded: evidence.RemoteWritePossible,
 		DeploymentID:             evidence.RequestID,
 		VersionIDs:               append([]string(nil), evidence.VersionIDs...),
+		ObservedMigrations:       append([]opscloudflarepayload.MigrationObservationEvidence(nil), evidence.ObservedMigrations...),
+		PendingMigrationTags:     append([]string(nil), evidence.PendingMigrationTags...),
+		MigrationOmitted:         evidence.MigrationOmitted,
 	}
+	if !evidence.RemoteWritePossible {
+		result.DeploymentID = ""
+		result.VersionIDs = nil
+	}
+	return result
 }

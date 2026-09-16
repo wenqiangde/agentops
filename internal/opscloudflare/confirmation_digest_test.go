@@ -50,6 +50,12 @@ func TestProductionDigestBindsTrustedExecutionIdentityAndCompleteOwnedPayload(t 
 		{name: "token provider identity", mutate: func(_ *opscloudflare.CloudflareDeployPlan, _ *opscloudflarepayload.Request, identity *opscloudflare.ProductionConfirmationIdentity) {
 			identity.TokenProviderIdentity = "workload-identity"
 		}},
+		{name: "migration derivation algorithm", mutate: func(_ *opscloudflare.CloudflareDeployPlan, _ *opscloudflarepayload.Request, identity *opscloudflare.ProductionConfirmationIdentity) {
+			identity.MigrationDerivationAlgorithm = "ordered-history-v2"
+		}},
+		{name: "allowed migration remote states", mutate: func(_ *opscloudflare.CloudflareDeployPlan, _ *opscloudflarepayload.Request, identity *opscloudflare.ProductionConfirmationIdentity) {
+			identity.AllowedMigrationRemoteStates = []string{"unsafe-any-tag"}
+		}},
 	}
 
 	for _, test := range tests {
@@ -58,6 +64,7 @@ func TestProductionDigestBindsTrustedExecutionIdentityAndCompleteOwnedPayload(t 
 			candidateRequest := request
 			candidateIdentity := identity
 			candidateIdentity.EndpointSequence = append([]string(nil), identity.EndpointSequence...)
+			candidateIdentity.AllowedMigrationRemoteStates = append([]string(nil), identity.AllowedMigrationRemoteStates...)
 			test.mutate(&candidatePlan, &candidateRequest, &candidateIdentity)
 			got, err := opscloudflare.ProductionDigest(candidatePlan, candidateRequest, candidateIdentity)
 			if test.reject {
@@ -92,12 +99,14 @@ func TestProductionDigestIsCanonicalAndExcludesCredentialBytes(t *testing.T) {
 		t.Fatalf("identical production inputs produced unstable canonical bytes:\n%s\n%s", first, second)
 	}
 	var material struct {
-		APIProfile              string   `json:"api_profile"`
-		ClientVersion           string   `json:"client_version"`
-		CanonicalMetadataSHA256 string   `json:"canonical_metadata_sha256"`
-		PayloadSHA256           string   `json:"payload_sha256"`
-		EndpointSequence        []string `json:"endpoint_sequence"`
-		TokenProviderIdentity   string   `json:"token_provider_identity"`
+		APIProfile                   string   `json:"api_profile"`
+		ClientVersion                string   `json:"client_version"`
+		CanonicalMetadataSHA256      string   `json:"canonical_metadata_sha256"`
+		PayloadSHA256                string   `json:"payload_sha256"`
+		EndpointSequence             []string `json:"endpoint_sequence"`
+		TokenProviderIdentity        string   `json:"token_provider_identity"`
+		MigrationDerivationAlgorithm string   `json:"migration_derivation_algorithm"`
+		AllowedMigrationRemoteStates []string `json:"allowed_migration_remote_states"`
 	}
 	if err := json.Unmarshal(first, &material); err != nil {
 		t.Fatalf("production confirmation material is not JSON: %v", err)
@@ -105,7 +114,8 @@ func TestProductionDigestIsCanonicalAndExcludesCredentialBytes(t *testing.T) {
 	metadataDigest := sha256.Sum256(request.Payload.Metadata)
 	if material.APIProfile != identity.APIProfile || material.ClientVersion != identity.ClientVersion ||
 		material.CanonicalMetadataSHA256 != hex.EncodeToString(metadataDigest[:]) || material.PayloadSHA256 != request.Payload.SHA256 ||
-		!reflect.DeepEqual(material.EndpointSequence, identity.EndpointSequence) || material.TokenProviderIdentity != identity.TokenProviderIdentity {
+		!reflect.DeepEqual(material.EndpointSequence, identity.EndpointSequence) || material.TokenProviderIdentity != identity.TokenProviderIdentity ||
+		material.MigrationDerivationAlgorithm != identity.MigrationDerivationAlgorithm || !reflect.DeepEqual(material.AllowedMigrationRemoteStates, identity.AllowedMigrationRemoteStates) {
 		t.Fatalf("production confirmation material is incomplete: %+v", material)
 	}
 
@@ -166,10 +176,12 @@ func productionDigestFixture(t *testing.T) (opscloudflare.CloudflareDeployPlan, 
 	}
 	plan := deployConfirmedPlan(payload.SHA256)
 	identity := opscloudflare.ProductionConfirmationIdentity{
-		APIProfile:            "wrangler-4.107-preveal-v1",
-		ClientVersion:         "cloudflare-go/v7.7.0",
-		EndpointSequence:      mustEndpointSequence(t, request),
-		TokenProviderIdentity: "environment",
+		APIProfile:                   "wrangler-4.107-preveal-v1",
+		ClientVersion:                "cloudflare-go/v7.7.0",
+		EndpointSequence:             mustEndpointSequence(t, request),
+		TokenProviderIdentity:        "environment",
+		MigrationDerivationAlgorithm: opscloudflarepayload.MigrationDerivationAlgorithm,
+		AllowedMigrationRemoteStates: opscloudflarepayload.AllowedMigrationRemoteStates(),
 	}
 	return plan, request, identity
 }

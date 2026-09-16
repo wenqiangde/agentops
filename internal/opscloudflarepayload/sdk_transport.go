@@ -58,11 +58,28 @@ func (s sdkProductionTransport) Deploy(ctx context.Context, token []byte, reques
 	service := workers.NewWorkerService(options...)
 	started := time.Now().UTC()
 	evidence := Evidence{ClientVersion: ProductionClientVersion, InputSHA256: request.ExpectedSHA256, StartedAt: started}
+	evidence.MigrationOmitted = true
 	if err := verifyEndpointsReadOnly(ctx, service, request, config, sequence); err != nil {
 		return evidence, err
 	}
 	if err := verifyCurrentDeployment(ctx, service, request.AccountID, request.Worker, request.ExpectedDeploymentID, request.ExpectedVersionIDs, sequence); err != nil {
 		return evidence, err
+	}
+	migrationDecision := migrationDecision{Omit: true}
+	if len(config.Migrations) > 0 {
+		var observations []MigrationObservationEvidence
+		migrationDecision, observations, err = readMigrationDecision(ctx, service, request, config.Migrations, sequence)
+		evidence.ObservedMigrations = observations
+		if err != nil {
+			return evidence, err
+		}
+		evidence.MigrationOmitted = migrationDecision.Omit
+		for _, migration := range migrationDecision.Steps {
+			evidence.PendingMigrationTags = append(evidence.PendingMigrationTags, migration.Tag)
+		}
+		if err := verifyCurrentDeployment(ctx, service, request.AccountID, request.Worker, request.ExpectedDeploymentID, request.ExpectedVersionIDs, sequence); err != nil {
+			return evidence, err
+		}
 	}
 	var versionID string
 	if len(request.Payload.Assets) == 0 {
@@ -93,7 +110,7 @@ func (s sdkProductionTransport) Deploy(ctx context.Context, token []byte, reques
 		if err != nil {
 			return finishEvidence(evidence), err
 		}
-		versionParams, err := versionParamFor(config, request.Payload, completionToken)
+		versionParams, err := versionParamForDecision(config, request.Payload, completionToken, migrationDecision)
 		if err != nil {
 			return finishEvidence(evidence), err
 		}
@@ -198,6 +215,69 @@ func verifyCurrentDeployment(ctx context.Context, service *workers.WorkerService
 	return nil
 }
 
+func readMigrationDecision(ctx context.Context, service *workers.WorkerService, request Request, history []Migration, sequence *endpointSequenceGuard) (migrationDecision, []MigrationObservationEvidence, error) {
+	versionIDs := append([]string(nil), request.ExpectedVersionIDs...)
+	sort.Strings(versionIDs)
+	observations := make([]versionMigrationObservation, 0, len(versionIDs))
+	evidence := make([]MigrationObservationEvidence, 0, len(versionIDs))
+	for _, versionID := range versionIDs {
+		if err := sequence.consume("current-version-detail-read-" + versionID); err != nil {
+			return migrationDecision{}, evidence, err
+		}
+		version, err := service.Scripts.Versions.Get(ctx, request.Worker, versionID, workers.ScriptVersionGetParams{AccountID: cloudflare.F(request.AccountID)})
+		if err != nil || version == nil {
+			return migrationDecision{}, evidence, errors.New("Cloudflare SDK version migration state read failed")
+		}
+		observation, observationEvidence, err := migrationObservation(versionID, version)
+		evidence = append(evidence, observationEvidence)
+		if err != nil {
+			return migrationDecision{}, evidence, err
+		}
+		observations = append(observations, observation)
+	}
+	decision, err := deriveMigrationDecision(history, observations)
+	return decision, evidence, err
+}
+
+func migrationObservation(expectedVersionID string, version *workers.ScriptVersionGetResponse) (versionMigrationObservation, MigrationObservationEvidence, error) {
+	evidence := MigrationObservationEvidence{VersionID: expectedVersionID, State: "invalid"}
+	runtimeField := version.Resources.JSON.ScriptRuntime
+	if runtimeField.IsMissing() || runtimeField.IsNull() || runtimeField.IsInvalid() {
+		return versionMigrationObservation{}, evidence, errors.New("Cloudflare SDK version runtime state is invalid")
+	}
+	tagField := version.Resources.ScriptRuntime.JSON.MigrationTag
+	observation := versionMigrationObservation{
+		ExpectedVersionID: expectedVersionID,
+		ResponseVersionID: version.ID,
+		RuntimePresent:    true,
+	}
+	switch {
+	case tagField.IsMissing():
+		observation.Tag.Kind = migrationTagAbsent
+		evidence.State = "absent"
+	case tagField.IsNull():
+		observation.Tag.Kind = migrationTagNull
+		evidence.State = "null"
+	case tagField.IsInvalid():
+		return versionMigrationObservation{}, evidence, errors.New("Cloudflare SDK version migration tag is invalid")
+	default:
+		if !ValidMigrationTag(version.Resources.ScriptRuntime.MigrationTag) {
+			return versionMigrationObservation{}, evidence, errors.New("Cloudflare SDK version migration tag is invalid")
+		}
+		observation.Tag = migrationTagObservation{Kind: migrationTagValue, Value: version.Resources.ScriptRuntime.MigrationTag}
+		evidence.State = "value"
+		evidence.Tag = boundedMigrationTag(version.Resources.ScriptRuntime.MigrationTag)
+	}
+	return observation, evidence, nil
+}
+
+func boundedMigrationTag(tag string) string {
+	if !ValidMigrationTag(tag) {
+		return "[invalid]"
+	}
+	return tag
+}
+
 func sameDeploymentVersions(expected []string, actual []workers.DeploymentVersion) bool {
 	if len(expected) != len(actual) {
 		return false
@@ -272,6 +352,14 @@ func sameDomains(expected map[string]bool, actual []workers.DomainListResponse, 
 }
 
 func versionParamFor(config CanonicalConfig, payload Payload, completionToken string) (workers.VersionParam, error) {
+	decision := migrationDecision{Omit: true}
+	if len(config.Migrations) > 0 {
+		decision = migrationDecision{NewTag: config.Migrations[len(config.Migrations)-1].Tag, Steps: append([]Migration(nil), config.Migrations...)}
+	}
+	return versionParamForDecision(config, payload, completionToken, decision)
+}
+
+func versionParamForDecision(config CanonicalConfig, payload Payload, completionToken string, decision migrationDecision) (workers.VersionParam, error) {
 	modules := make([]workers.VersionModuleParam, len(payload.Modules))
 	for index, module := range payload.Modules {
 		modules[index] = workers.VersionModuleParam{
@@ -324,19 +412,43 @@ func versionParamFor(config CanonicalConfig, payload Payload, completionToken st
 			}),
 		})
 	}
-	if len(config.Migrations) > 1 {
-		return workers.VersionParam{}, errors.New("Cloudflare SDK multi-step migrations are unsupported")
-	}
-	if len(config.Migrations) == 1 {
-		migration := config.Migrations[0]
+	if !decision.Omit && len(decision.Steps) == 1 {
+		migration := decision.Steps[0]
 		renames := make([]workers.SingleStepMigrationRenamedClassParam, len(migration.RenamedClasses))
 		for index, rename := range migration.RenamedClasses {
 			renames[index] = workers.SingleStepMigrationRenamedClassParam{From: cloudflare.F(rename.From), To: cloudflare.F(rename.To)}
 		}
 		version.Migrations = cloudflare.F[workers.VersionMigrationsUnionParam](workers.SingleStepMigrationParam{
-			NewTag: cloudflare.F(migration.Tag), NewSqliteClasses: cloudflare.F(append([]string(nil), migration.NewSQLiteClasses...)),
+			NewTag: cloudflare.F(decision.NewTag), NewSqliteClasses: cloudflare.F(append([]string(nil), migration.NewSQLiteClasses...)),
 			NewClasses: cloudflare.F(append([]string(nil), migration.NewClasses...)), DeletedClasses: cloudflare.F(append([]string(nil), migration.DeletedClasses...)), RenamedClasses: cloudflare.F(renames),
 		})
+		if decision.OldTagPresent {
+			migrationParam := version.Migrations.Value.(workers.SingleStepMigrationParam)
+			migrationParam.OldTag = cloudflare.F(decision.OldTag)
+			version.Migrations = cloudflare.F[workers.VersionMigrationsUnionParam](migrationParam)
+		}
+	} else if !decision.Omit && len(decision.Steps) > 1 {
+		steps := make([]workers.MigrationStepParam, len(decision.Steps))
+		for index, migration := range decision.Steps {
+			renames := make([]workers.MigrationStepRenamedClassParam, len(migration.RenamedClasses))
+			for renameIndex, rename := range migration.RenamedClasses {
+				renames[renameIndex] = workers.MigrationStepRenamedClassParam{From: cloudflare.F(rename.From), To: cloudflare.F(rename.To)}
+			}
+			steps[index] = workers.MigrationStepParam{
+				NewSqliteClasses: cloudflare.F(append([]string(nil), migration.NewSQLiteClasses...)),
+				NewClasses:       cloudflare.F(append([]string(nil), migration.NewClasses...)),
+				DeletedClasses:   cloudflare.F(append([]string(nil), migration.DeletedClasses...)),
+				RenamedClasses:   cloudflare.F(renames),
+			}
+		}
+		migrationParam := workers.VersionMigrationsWorkersMultipleStepMigrationsParam{
+			NewTag: cloudflare.F(decision.NewTag),
+			Steps:  cloudflare.F(steps),
+		}
+		if decision.OldTagPresent {
+			migrationParam.OldTag = cloudflare.F(decision.OldTag)
+		}
+		version.Migrations = cloudflare.F[workers.VersionMigrationsUnionParam](migrationParam)
 	}
 	return version, nil
 }
@@ -406,7 +518,7 @@ func (r *namedModuleReader) ContentType() string { return r.contentType }
 
 func sdkProfileSupported(config CanonicalConfig, payload Payload) bool {
 	assetsMatch := (len(payload.Assets) == 0 && config.Assets == nil) || (len(payload.Assets) > 0 && config.Assets != nil)
-	if !assetsMatch || len(config.Migrations) > 1 {
+	if !assetsMatch {
 		return false
 	}
 	if len(payload.Assets) == 0 && hasVersionMetadataRequiringBetaAPI(config) {

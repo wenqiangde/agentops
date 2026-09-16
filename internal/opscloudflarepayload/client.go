@@ -20,13 +20,22 @@ type Request struct {
 }
 
 type Evidence struct {
-	ClientVersion       string
-	RequestID           string
-	VersionIDs          []string
-	InputSHA256         string
-	RemoteWritePossible bool
-	StartedAt           time.Time
-	FinishedAt          time.Time
+	ClientVersion        string
+	RequestID            string
+	VersionIDs           []string
+	InputSHA256          string
+	RemoteWritePossible  bool
+	ObservedMigrations   []MigrationObservationEvidence
+	PendingMigrationTags []string
+	MigrationOmitted     bool
+	StartedAt            time.Time
+	FinishedAt           time.Time
+}
+
+type MigrationObservationEvidence struct {
+	VersionID string `json:"version_id"`
+	State     string `json:"state"`
+	Tag       string `json:"tag,omitempty"`
 }
 
 type TrustedTransport interface {
@@ -159,7 +168,7 @@ func clearBytes(value []byte) {
 }
 
 func NewRequest(accountID, worker, expectedDeploymentID string, expectedVersionIDs []string, expectedSHA256 string, payload Payload, timeout time.Duration) (Request, error) {
-	if accountID == "" || worker == "" || expectedDeploymentID == "" || len(expectedVersionIDs) == 0 || expectedSHA256 == "" || timeout <= 0 || !payloadDigestMatches(payload, expectedSHA256) {
+	if accountID == "" || worker == "" || expectedDeploymentID == "" || !uniqueNonEmptyValues(expectedVersionIDs) || expectedSHA256 == "" || timeout <= 0 || !payloadDigestMatches(payload, expectedSHA256) {
 		return Request{}, errors.New("Cloudflare client request is invalid")
 	}
 	return Request{
@@ -171,6 +180,23 @@ func NewRequest(accountID, worker, expectedDeploymentID string, expectedVersionI
 		Payload:              payload.clone(),
 		Timeout:              timeout,
 	}, nil
+}
+
+func uniqueNonEmptyValues(values []string) bool {
+	if len(values) == 0 {
+		return false
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if value == "" {
+			return false
+		}
+		if _, exists := seen[value]; exists {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	return true
 }
 
 func OwnRequest(request Request) (Request, error) {

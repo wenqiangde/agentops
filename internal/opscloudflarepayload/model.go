@@ -55,11 +55,17 @@ func validateModules(mainModule string, modules []Module) error {
 	foundMain := false
 	seen := make(map[string]bool, len(modules))
 	for _, module := range modules {
-		if module.Name == "" || len(module.Bytes) == 0 || module.Type != "application/javascript+module" || seen[module.Name] {
+		supportedType := module.Type == "application/javascript+module" || module.Type == "application/wasm"
+		if module.Name == "" || len(module.Bytes) == 0 || !supportedType || seen[module.Name] {
 			return errors.New("Cloudflare payload module is unsupported")
 		}
 		seen[module.Name] = true
-		foundMain = foundMain || module.Name == mainModule
+		if module.Name == mainModule {
+			if module.Type != "application/javascript+module" {
+				return errors.New("Cloudflare payload main module is unsupported")
+			}
+			foundMain = true
+		}
 	}
 	if !foundMain {
 		return errors.New("Cloudflare payload main module is missing")

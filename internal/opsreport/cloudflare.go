@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wenqiangde/agentops/internal/opscloudflare"
+	"github.com/wenqiangde/agentops/internal/opscloudflarepayload"
 )
 
 type CloudflareOutcome string
@@ -19,13 +20,16 @@ const (
 )
 
 type CloudflareEvidence struct {
-	Operation            string                      `json:"operation"`
-	Outcome              CloudflareOutcome           `json:"outcome"`
-	ErrorCode            string                      `json:"error_code,omitempty"`
-	PreviousDeploymentID string                      `json:"previous_deployment_id,omitempty"`
-	DeploymentID         string                      `json:"deployment_id,omitempty"`
-	VersionIDs           []string                    `json:"version_ids,omitempty"`
-	Stages               []opscloudflare.StageResult `json:"stages"`
+	Operation            string                                              `json:"operation"`
+	Outcome              CloudflareOutcome                                   `json:"outcome"`
+	ErrorCode            string                                              `json:"error_code,omitempty"`
+	PreviousDeploymentID string                                              `json:"previous_deployment_id,omitempty"`
+	DeploymentID         string                                              `json:"deployment_id,omitempty"`
+	VersionIDs           []string                                            `json:"version_ids,omitempty"`
+	ObservedMigrations   []opscloudflarepayload.MigrationObservationEvidence `json:"observed_migrations,omitempty"`
+	PendingMigrationTags []string                                            `json:"pending_migration_tags,omitempty"`
+	MigrationOmitted     bool                                                `json:"migration_omitted"`
+	Stages               []opscloudflare.StageResult                         `json:"stages"`
 }
 
 type CloudflareReportInput struct {
@@ -41,6 +45,9 @@ type CloudflareReportInput struct {
 	PreviousDeploymentID string
 	DeploymentID         string
 	VersionIDs           []string
+	ObservedMigrations   []opscloudflarepayload.MigrationObservationEvidence
+	PendingMigrationTags []string
+	MigrationOmitted     bool
 	Stages               []opscloudflare.StageResult
 	Outcome              CloudflareOutcome
 	Health               HealthEvidence
@@ -61,6 +68,8 @@ func NewCloudflareReport(input CloudflareReportInput) (Report, error) {
 		Operation: input.Operation, Outcome: input.Outcome, ErrorCode: input.ErrorCode,
 		PreviousDeploymentID: input.PreviousDeploymentID, DeploymentID: input.DeploymentID,
 		VersionIDs: append([]string(nil), input.VersionIDs...), Stages: append([]opscloudflare.StageResult(nil), input.Stages...),
+		ObservedMigrations:   append([]opscloudflarepayload.MigrationObservationEvidence(nil), input.ObservedMigrations...),
+		PendingMigrationTags: append([]string(nil), input.PendingMigrationTags...), MigrationOmitted: input.MigrationOmitted,
 	}
 	report := Report{
 		OperationID: input.OperationID, Actor: input.Actor, Service: input.Service, Environment: input.Environment,
@@ -116,8 +125,30 @@ func validateCloudflareEvidence(evidence CloudflareEvidence) error {
 		return errors.New("Cloudflare report error code is invalid")
 	}
 	for _, identifier := range append(append([]string(nil), evidence.PreviousDeploymentID, evidence.DeploymentID), evidence.VersionIDs...) {
-		if identifier != "" && !cloudflareUUID.MatchString(identifier) {
+		if identifier != "" && !cloudflareUUID.MatchString(identifier) && !(evidence.Outcome == CloudflareUnknownState && identifier == "[invalid]") {
 			return errors.New("Cloudflare report durable identity is invalid")
+		}
+	}
+	for _, observation := range evidence.ObservedMigrations {
+		if !cloudflareUUID.MatchString(observation.VersionID) {
+			return errors.New("Cloudflare report migration version identity is invalid")
+		}
+		switch observation.State {
+		case "absent", "null", "invalid":
+			if observation.Tag != "" {
+				return errors.New("Cloudflare report migration observation is invalid")
+			}
+		case "value":
+			if !opscloudflarepayload.ValidMigrationTag(observation.Tag) {
+				return errors.New("Cloudflare report migration observation is invalid")
+			}
+		default:
+			return errors.New("Cloudflare report migration observation state is invalid")
+		}
+	}
+	for _, tag := range evidence.PendingMigrationTags {
+		if !opscloudflarepayload.ValidMigrationTag(tag) {
+			return errors.New("Cloudflare report pending migration tag is invalid")
 		}
 	}
 	if len(evidence.Stages) == 0 {
@@ -129,4 +160,11 @@ func validateCloudflareEvidence(evidence CloudflareEvidence) error {
 		}
 	}
 	return nil
+}
+
+func ReportSafeCloudflareFailureIdentifier(identifier string) string {
+	if identifier == "" || cloudflareUUID.MatchString(identifier) {
+		return identifier
+	}
+	return "[invalid]"
 }

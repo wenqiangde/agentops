@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wenqiangde/agentops/internal/opscloudflare"
+	"github.com/wenqiangde/agentops/internal/opscloudflarepayload"
 	"github.com/wenqiangde/agentops/internal/opsreport"
 )
 
@@ -47,6 +48,9 @@ func TestNewCloudflareReportClassifiesProductionOutcomes(t *testing.T) {
 			if len(report.Cloudflare.Stages) != len(input.Stages) || report.Cloudflare.Stages[0].Code != input.Stages[0].Code {
 				t.Fatalf("safe stage evidence missing: %+v", report.Cloudflare.Stages)
 			}
+			if !reflect.DeepEqual(report.Cloudflare.ObservedMigrations, input.ObservedMigrations) || !reflect.DeepEqual(report.Cloudflare.PendingMigrationTags, input.PendingMigrationTags) || report.Cloudflare.MigrationOmitted != input.MigrationOmitted {
+				t.Fatalf("migration evidence missing: %+v", report.Cloudflare)
+			}
 		})
 	}
 }
@@ -65,6 +69,22 @@ func TestNewCloudflareRollbackIdentityMismatchIsUnknownState(t *testing.T) {
 	}
 	if report.Cloudflare == nil || report.Cloudflare.Outcome != opsreport.CloudflareUnknownState || report.Terminal || report.Recovery != "manual-review-required" || report.ManualWork != "inspect-remote-state-before-retry" {
 		t.Fatalf("rollback identity mismatch was not preserved as unknown state: %+v", report)
+	}
+}
+
+func TestNewCloudflareReportRejectsInvalidMigrationEvidence(t *testing.T) {
+	tests := []opscloudflarepayload.MigrationObservationEvidence{
+		{VersionID: "not-a-version", State: "value", Tag: "v1"},
+		{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "unknown", Tag: "v1"},
+		{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "absent", Tag: "v1"},
+		{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "value"},
+	}
+	for _, observation := range tests {
+		input := validCloudflareReportInput(t)
+		input.ObservedMigrations = []opscloudflarepayload.MigrationObservationEvidence{observation}
+		if report, err := opsreport.NewCloudflareReport(input); err == nil {
+			t.Fatalf("invalid migration evidence accepted: %+v report=%+v", observation, report)
+		}
 	}
 }
 
@@ -127,6 +147,8 @@ func validCloudflareReportInput(t *testing.T) opsreport.CloudflareReportInput {
 	return opsreport.CloudflareReportInput{
 		OperationID:          "cloudflare-deploy-20260915-001",
 		Operation:            "deploy",
+		ObservedMigrations:   []opscloudflarepayload.MigrationObservationEvidence{{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "value", Tag: "v1"}},
+		PendingMigrationTags: []string{"v2"},
 		Actor:                "environment",
 		Service:              "example-relay",
 		Environment:          "production",

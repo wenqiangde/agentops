@@ -40,6 +40,14 @@ func TestClientRequestRejectsDigestMismatch(t *testing.T) {
 	}
 }
 
+func TestClientRequestRejectsDuplicateExpectedVersionIDs(t *testing.T) {
+	payload := contractTestPayload(t)
+	versionID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	if _, err := opscloudflarepayload.NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{versionID, versionID}, payload.SHA256, payload, time.Second); err == nil {
+		t.Fatal("duplicate expected version IDs were accepted")
+	}
+}
+
 func TestClientRequestRejectsPayloadMutationAfterConstruction(t *testing.T) {
 	payload := contractTestPayload(t)
 	request, err := opscloudflarepayload.NewRequest("account", "worker", "11111111-1111-4111-8111-111111111111", []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}, payload.SHA256, payload, time.Second)

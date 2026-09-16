@@ -13,11 +13,108 @@ import (
 	"time"
 
 	"github.com/wenqiangde/agentops/internal/opscloudflare"
+	"github.com/wenqiangde/agentops/internal/opscloudflarepayload"
 	"github.com/wenqiangde/agentops/internal/opsconfig"
 	"github.com/wenqiangde/agentops/internal/opsexec"
 	"github.com/wenqiangde/agentops/internal/opshealth"
 	"github.com/wenqiangde/agentops/internal/opsreport"
 )
+
+func TestCloudflareOperationReportPreservesMigrationEvidence(t *testing.T) {
+	started := time.Date(2026, 9, 16, 1, 2, 3, 0, time.UTC)
+	finished := started.Add(time.Second)
+	plan := opscloudflare.CloudflareDeployPlan{
+		Service: "example-relay", Environment: "production", Worker: "example-worker", AccountID: "0123456789abcdef0123456789abcdef",
+		RequestedVersion: "2026.09.16-1", ScopeContentSHA256: strings.Repeat("1", 64), DeploymentInputSHA256: strings.Repeat("3", 64),
+	}
+	result := opscloudflare.ApplyResult{
+		Success: true, ProductionWriteSucceeded: true,
+		DeploymentID: "22222222-2222-4222-8222-222222222222", VersionIDs: []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"},
+		ObservedMigrations:   []opscloudflarepayload.MigrationObservationEvidence{{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "null"}},
+		PendingMigrationTags: []string{"v1", "v2"},
+	}
+	for _, health := range []opshealth.Result{
+		{Type: "http", Healthy: true, StatusCode: 200},
+		{Type: "http", Healthy: false, StatusCode: 503},
+	} {
+		report, err := cloudflareOperationReport("cloudflare-deploy-20260916-001", strings.Repeat("2", 64), plan, result, health, started, finished)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.Cloudflare == nil || len(report.Cloudflare.ObservedMigrations) != 1 || report.Cloudflare.ObservedMigrations[0].State != "null" || len(report.Cloudflare.PendingMigrationTags) != 2 || report.Cloudflare.MigrationOmitted {
+			t.Fatalf("migration evidence missing from report: %+v", report.Cloudflare)
+		}
+		if report.ArtifactDigest != plan.DeploymentInputSHA256 {
+			t.Fatalf("report payload digest=%q", report.ArtifactDigest)
+		}
+	}
+}
+
+func TestCloudflarePreWriteFailurePersistsMigrationEvidence(t *testing.T) {
+	root := t.TempDir()
+	plan := opscloudflare.CloudflareDeployPlan{
+		Service: "example-relay", Environment: "production", Worker: "example-worker", RequestedVersion: "2026.09.16-1",
+		DeploymentInputSHA256: strings.Repeat("3", 64),
+	}
+	result := opscloudflare.ApplyResult{
+		ObservedMigrations: []opscloudflarepayload.MigrationObservationEvidence{{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "null"}},
+		MigrationOmitted:   true,
+	}
+	var output bytes.Buffer
+	started := time.Date(2026, 9, 16, 1, 2, 3, 0, time.UTC)
+	if err := writeCloudflareApplyFailureReport(root, "cloudflare-deploy", strings.Repeat("2", 64), plan, result, started, started.Add(time.Second), &output); err != nil {
+		t.Fatal(err)
+	}
+	var reportPath string
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() && strings.HasSuffix(path, ".json") {
+			reportPath = path
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report opsreport.Report
+	if json.Unmarshal(data, &report) != nil || report.Cloudflare == nil {
+		t.Fatalf("invalid report: %s", data)
+	}
+	if report.Cloudflare.Outcome != opsreport.CloudflareKnownFailure || len(report.Cloudflare.ObservedMigrations) != 1 || !report.Cloudflare.MigrationOmitted || report.ArtifactDigest != plan.DeploymentInputSHA256 {
+		t.Fatalf("pre-write evidence missing: %+v", report.Cloudflare)
+	}
+}
+
+func TestCloudflarePostWriteInvalidIdentityPersistsReportSafeState(t *testing.T) {
+	root := t.TempDir()
+	plan := opscloudflare.CloudflareDeployPlan{Service: "example-relay", Environment: "production", Worker: "example-worker", RequestedVersion: "2026.09.16-1", DeploymentInputSHA256: strings.Repeat("3", 64)}
+	result := opscloudflare.ApplyResult{ProductionWriteSucceeded: true, DeploymentID: "invalid deployment\nsecret", VersionIDs: []string{"invalid-version"}}
+	var output bytes.Buffer
+	started := time.Date(2026, 9, 16, 1, 2, 3, 0, time.UTC)
+	if err := writeCloudflareApplyFailureReport(root, "cloudflare-deploy", strings.Repeat("2", 64), plan, result, started, started.Add(time.Second), &output); err != nil {
+		t.Fatal(err)
+	}
+	data := readOnlyReport(t, root)
+	var report opsreport.Report
+	if json.Unmarshal(data, &report) != nil || report.Cloudflare == nil || report.Cloudflare.DeploymentID != "[invalid]" || len(report.Cloudflare.VersionIDs) != 1 || report.Cloudflare.VersionIDs[0] != "[invalid]" {
+		t.Fatalf("invalid identity state was not safely persisted: %s", data)
+	}
+}
+
+func readOnlyReport(t *testing.T, root string) []byte {
+	t.Helper()
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("reports=%v err=%v", entries, err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
 
 func TestOpsDeployRoutesCloudflareWorkerToReadOnlyPreview(t *testing.T) {
 	p := opsTestPaths(t, "valid")

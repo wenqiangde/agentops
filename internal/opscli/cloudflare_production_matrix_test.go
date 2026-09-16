@@ -3,6 +3,8 @@ package opscli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +14,7 @@ import (
 	"github.com/wenqiangde/agentops/internal/opscloudflarepayload"
 	"github.com/wenqiangde/agentops/internal/opsexec"
 	"github.com/wenqiangde/agentops/internal/opshealth"
+	"github.com/wenqiangde/agentops/internal/opsreport"
 	"github.com/wenqiangde/agentops/internal/paths"
 )
 
@@ -118,6 +121,27 @@ func TestCloudflareProductionDeployUsesReviewedEndpointSequenceWithFake(t *testi
 	}
 }
 
+func TestCloudflareProductionDeployPersistsPreWriteFailureWithoutObservations(t *testing.T) {
+	p, args := cloudflareDeployMatrixFixture(t)
+	writer := &recordingCloudflareProductionWriter{deployErr: errors.New("pre-write rejection")}
+	stubCloudflareProductionClient(t, func() (cloudflareProductionWriter, error) { return writer, nil })
+	stubCLICloudflareExecutor(t, successfulCLICloudflareExecutor())
+
+	var preview, previewErr bytes.Buffer
+	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
+		t.Fatalf("preview code=%d out=%q err=%q", code, preview.String(), previewErr.String())
+	}
+	stubCLICloudflareExecutor(t, successfulCLICloudflareExecutor())
+	var stdout, stderr bytes.Buffer
+	confirm := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
+	if code, _ := executeRootCommand(p, confirm, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "apply failed") {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "report-id: ") {
+		t.Fatalf("pre-write failure did not persist a known-failure report: %s", stdout.String())
+	}
+}
+
 func TestCloudflareProductionRollbackUsesReviewedEndpointSequenceWithFake(t *testing.T) {
 	p := opsTestPaths(t, "valid")
 	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
@@ -150,6 +174,32 @@ func TestCloudflareProductionRollbackUsesReviewedEndpointSequenceWithFake(t *tes
 	}
 }
 
+func TestCloudflareProductionRollbackPersistsPreWriteFailure(t *testing.T) {
+	p := opsTestPaths(t, "valid")
+	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
+	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
+	target := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	args := []string{"ops", "rollback", "example-relay", "--environment", "production", "--version", target}
+	writer := &recordingCloudflareProductionWriter{rollbackErr: errors.New("pre-write rejection")}
+	stubCloudflareProductionClient(t, func() (cloudflareProductionWriter, error) { return writer, nil })
+	stubCLICloudflareExecutor(t, successfulCLICloudflareRollbackExecutor(target))
+	var preview, previewErr bytes.Buffer
+	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
+		t.Fatalf("preview code=%d out=%q err=%q", code, preview.String(), previewErr.String())
+	}
+	stubCLICloudflareExecutor(t, successfulCLICloudflareRollbackExecutor(target))
+	var stdout, stderr bytes.Buffer
+	confirm := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
+	if code, _ := executeRootCommand(p, confirm, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "apply failed") || !strings.Contains(stdout.String(), "report-id: ") {
+		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
+	}
+	data := readOnlyReport(t, p.OpsReportRoot)
+	var report opsreport.Report
+	if json.Unmarshal(data, &report) != nil || report.Cloudflare == nil || report.Cloudflare.Outcome != opsreport.CloudflareKnownFailure {
+		t.Fatalf("rollback pre-write known-failure report missing: %s", data)
+	}
+}
+
 func TestSSHRouteDoesNotConstructCloudflareProductionClient(t *testing.T) {
 	p := opsTestPaths(t, "valid")
 	clientCalls := 0
@@ -172,15 +222,22 @@ func TestSSHRouteDoesNotConstructCloudflareProductionClient(t *testing.T) {
 }
 
 type recordingCloudflareProductionWriter struct {
-	deployCalls     int
-	rollbackCalls   int
-	deployRequest   opscloudflarepayload.Request
-	rollbackRequest opscloudflarepayload.RollbackRequest
+	deployCalls      int
+	rollbackCalls    int
+	deployRequest    opscloudflarepayload.Request
+	rollbackRequest  opscloudflarepayload.RollbackRequest
+	deployEvidence   opscloudflarepayload.Evidence
+	deployErr        error
+	rollbackEvidence opscloudflarepayload.Evidence
+	rollbackErr      error
 }
 
 func (w *recordingCloudflareProductionWriter) Deploy(_ context.Context, request opscloudflarepayload.Request) (opscloudflarepayload.Evidence, error) {
 	w.deployCalls++
 	w.deployRequest = request
+	if w.deployErr != nil || w.deployEvidence.InputSHA256 != "" {
+		return w.deployEvidence, w.deployErr
+	}
 	return opscloudflarepayload.Evidence{
 		ClientVersion: opscloudflarepayload.ProductionClientVersion,
 		RequestID:     "22222222-2222-4222-8222-222222222222",
@@ -192,6 +249,9 @@ func (w *recordingCloudflareProductionWriter) Deploy(_ context.Context, request 
 func (w *recordingCloudflareProductionWriter) Rollback(_ context.Context, request opscloudflarepayload.RollbackRequest) (opscloudflarepayload.Evidence, error) {
 	w.rollbackCalls++
 	w.rollbackRequest = request
+	if w.rollbackErr != nil || w.rollbackEvidence.InputSHA256 != "" {
+		return w.rollbackEvidence, w.rollbackErr
+	}
 	return opscloudflarepayload.Evidence{
 		ClientVersion: opscloudflarepayload.ProductionClientVersion,
 		RequestID:     "22222222-2222-4222-8222-222222222222",

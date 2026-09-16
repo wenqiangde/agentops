@@ -2,6 +2,7 @@ package opscloudflarepayload_test
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/wenqiangde/agentops/internal/opscloudflarepayload"
@@ -102,6 +103,8 @@ func TestCapabilityRejectsUnsupportedWranglerConfiguration(t *testing.T) {
 		"unknown durable object": withConfigField(`"durable_objects":{"bindings":[{"name":"DO","class_name":"Thing","unknown":true}]}`),
 		"unknown migration":      withConfigField(`"migrations":[{"tag":"v1","unknown_classes":["Thing"]}]`),
 		"unknown rename":         withConfigField(`"migrations":[{"tag":"v1","renamed_classes":[{"from":"Old","to":"New","unknown":true}]}]`),
+		"migration tag too long": withConfigField(`"migrations":[{"tag":"` + strings.Repeat("a", 129) + `","new_classes":["Thing"]}]`),
+		"migration tag control":  withConfigField(`"migrations":[{"tag":"v1\u000a","new_classes":["Thing"]}]`),
 		"non-string var":         withConfigField(`"vars":{"COUNT":3}`),
 	}
 	for name, input := range tests {

@@ -255,7 +255,7 @@ func (c CanonicalConfig) validate() error {
 		}
 	}
 	for _, migration := range c.Migrations {
-		if empty(migration.Tag) || len(migration.NewSQLiteClasses)+len(migration.NewClasses)+len(migration.RenamedClasses)+len(migration.DeletedClasses) == 0 {
+		if !ValidMigrationTag(migration.Tag) || len(migration.NewSQLiteClasses)+len(migration.NewClasses)+len(migration.RenamedClasses)+len(migration.DeletedClasses) == 0 {
 			return errors.New("Cloudflare Wrangler migration is incomplete")
 		}
 		for _, rename := range migration.RenamedClasses {
@@ -265,6 +265,10 @@ func (c CanonicalConfig) validate() error {
 		}
 	}
 	return nil
+}
+
+func ValidMigrationTag(tag string) bool {
+	return len(tag) > 0 && len(tag) <= 128 && strings.IndexFunc(tag, func(r rune) bool { return r < 0x20 || r == 0x7f }) < 0
 }
 
 func rejectDuplicateJSONKeys(input []byte) error {

@@ -232,10 +232,8 @@ func opsCloudflareRollback(reportRoot string, service opsconfig.Service, product
 	}
 	result, err := opscloudflare.ApplyRollback(applyCtx, client, confirmed)
 	if err != nil || !result.Success {
-		if result.ProductionWriteSucceeded {
-			if reportErr := writeCloudflareRollbackFailureReport(reportRoot, digest, plan, result, started, time.Now().UTC(), stdout); reportErr != nil {
-				fmt.Fprintln(stderr, "agentops: production state unknown; audit persistence failed")
-			}
+		if reportErr := writeCloudflareRollbackFailureReport(reportRoot, digest, plan, result, started, time.Now().UTC(), stdout); reportErr != nil {
+			fmt.Fprintln(stderr, "agentops: Cloudflare audit persistence failed")
 		}
 		fmt.Fprintln(stdout, "rollback: failed")
 		fmt.Fprintln(stderr, "agentops: Cloudflare rollback apply failed")
@@ -269,19 +267,27 @@ func writeCloudflareRollbackFailureReport(reportRoot, digest string, plan opsclo
 	if err != nil {
 		return err
 	}
-	stage, err := opscloudflare.NewStageResult(opscloudflare.StageIdentityVerification, "CF_ROLLBACK_IDENTITY_MISMATCH", finished.Sub(started), opscloudflare.TimeoutNone, opscloudflare.NewCorrelationID())
+	stageName := opscloudflare.StageIdentityVerification
+	stageCode := "CF_ROLLBACK_IDENTITY_MISMATCH"
+	outcome := opsreport.CloudflareUnknownState
+	if !result.ProductionWriteSucceeded {
+		stageName = opscloudflare.StageProductionAction
+		stageCode = "CF_PRODUCTION_ACTION_REJECTED"
+		outcome = opsreport.CloudflareKnownFailure
+	}
+	stage, err := opscloudflare.NewStageResult(stageName, opscloudflare.StageCode(stageCode), finished.Sub(started), opscloudflare.TimeoutNone, opscloudflare.NewCorrelationID())
 	if err != nil {
 		return err
 	}
 	versionIDs := []string(nil)
 	if result.VersionID != "" {
-		versionIDs = []string{result.VersionID}
+		versionIDs = []string{opsreport.ReportSafeCloudflareFailureIdentifier(result.VersionID)}
 	}
 	report, err := opsreport.NewCloudflareReport(opsreport.CloudflareReportInput{
 		OperationID: operationID, Operation: "rollback", Actor: "environment", Service: plan.Service, Environment: plan.Environment, Worker: plan.Worker,
 		PlanDigest: digest, PayloadDigest: plan.DeploymentInputSHA256, RequestedVersion: plan.TargetVersionID,
-		PreviousDeploymentID: plan.CurrentDeploymentID, DeploymentID: result.DeploymentID, VersionIDs: versionIDs, Stages: []opscloudflare.StageResult{stage},
-		Outcome: opsreport.CloudflareUnknownState, Health: opsreport.HealthEvidence{Type: "http", State: "not-checked"}, ErrorCode: "CF_ROLLBACK_IDENTITY_MISMATCH",
+		PreviousDeploymentID: plan.CurrentDeploymentID, DeploymentID: opsreport.ReportSafeCloudflareFailureIdentifier(result.DeploymentID), VersionIDs: versionIDs, Stages: []opscloudflare.StageResult{stage},
+		Outcome: outcome, Health: opsreport.HealthEvidence{Type: "http", State: "not-checked"}, ErrorCode: stageCode,
 		StartedAt: started, FinishedAt: finished,
 	})
 	if err != nil {

@@ -79,9 +79,11 @@ func TestApplyPreservesUnknownRemoteStateFromWriterError(t *testing.T) {
 	}
 	writer := &recordingDeploymentWriter{
 		evidence: opscloudflarepayload.Evidence{
-			RemoteWritePossible: true,
-			RequestID:           "22222222-2222-4222-8222-222222222222",
-			VersionIDs:          []string{"11111111-1111-4111-8111-111111111111"},
+			RemoteWritePossible:  true,
+			RequestID:            "22222222-2222-4222-8222-222222222222",
+			VersionIDs:           []string{"11111111-1111-4111-8111-111111111111"},
+			ObservedMigrations:   []opscloudflarepayload.MigrationObservationEvidence{{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "value", Tag: "v1"}},
+			PendingMigrationTags: []string{"v2"},
 		},
 		err: errors.New("identity read failed"),
 	}
@@ -91,6 +93,63 @@ func TestApplyPreservesUnknownRemoteStateFromWriterError(t *testing.T) {
 	}
 	if !result.ProductionWriteSucceeded || result.DeploymentID != writer.evidence.RequestID || len(result.VersionIDs) != 1 || result.VersionIDs[0] != writer.evidence.VersionIDs[0] {
 		t.Fatalf("unknown remote state evidence was lost: %#v", result)
+	}
+	if len(result.ObservedMigrations) != 1 || result.ObservedMigrations[0].State != "value" || result.ObservedMigrations[0].Tag != "v1" || len(result.PendingMigrationTags) != 1 || result.PendingMigrationTags[0] != "v2" {
+		t.Fatalf("migration decision evidence was lost: %#v", result)
+	}
+}
+
+func TestApplyPreservesMigrationEvidenceBeforeAnyWrite(t *testing.T) {
+	request := deployPayloadRequest(t)
+	plan := deployConfirmedPlan(request.ExpectedSHA256)
+	identity := deployProductionIdentity()
+	digest, err := opscloudflare.ProductionDigest(plan, request, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := opscloudflare.ConfirmProduction(plan, request, identity, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordingDeploymentWriter{
+		evidence: opscloudflarepayload.Evidence{ObservedMigrations: []opscloudflarepayload.MigrationObservationEvidence{{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "null"}}, MigrationOmitted: true},
+		err:      errors.New("migration state read failed"),
+	}
+	result, err := opscloudflare.Apply(context.Background(), writer, confirmed)
+	if err == nil {
+		t.Fatal("pre-write migration read failure was reported as success")
+	}
+	if result.ProductionWriteSucceeded || len(result.ObservedMigrations) != 1 || result.ObservedMigrations[0].State != "null" || !result.MigrationOmitted {
+		t.Fatalf("pre-write migration evidence was lost: %+v", result)
+	}
+}
+
+func TestApplyPreservesEvidenceWhenPostWriteIdentityIsInvalid(t *testing.T) {
+	request := deployPayloadRequest(t)
+	plan := deployConfirmedPlan(request.ExpectedSHA256)
+	identity := deployProductionIdentity()
+	digest, err := opscloudflare.ProductionDigest(plan, request, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := opscloudflare.ConfirmProduction(plan, request, identity, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &recordingDeploymentWriter{evidence: opscloudflarepayload.Evidence{
+		RemoteWritePossible:  true,
+		RequestID:            "invalid-deployment-id",
+		VersionIDs:           []string{"invalid-version-id"},
+		InputSHA256:          request.ExpectedSHA256,
+		ObservedMigrations:   []opscloudflarepayload.MigrationObservationEvidence{{VersionID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", State: "value", Tag: "v1"}},
+		PendingMigrationTags: []string{"v2"},
+	}}
+	result, err := opscloudflare.Apply(context.Background(), writer, confirmed)
+	if err == nil {
+		t.Fatal("invalid post-write identity was reported as success")
+	}
+	if !result.ProductionWriteSucceeded || result.DeploymentID != writer.evidence.RequestID || len(result.VersionIDs) != 1 || len(result.ObservedMigrations) != 1 || len(result.PendingMigrationTags) != 1 {
+		t.Fatalf("post-write identity failure lost bounded evidence: %+v", result)
 	}
 }
 

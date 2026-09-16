@@ -12,20 +12,24 @@ import (
 )
 
 type ProductionConfirmationIdentity struct {
-	APIProfile            string   `json:"api_profile"`
-	ClientVersion         string   `json:"client_version"`
-	EndpointSequence      []string `json:"endpoint_sequence"`
-	TokenProviderIdentity string   `json:"token_provider_identity"`
+	APIProfile                   string   `json:"api_profile"`
+	ClientVersion                string   `json:"client_version"`
+	EndpointSequence             []string `json:"endpoint_sequence"`
+	TokenProviderIdentity        string   `json:"token_provider_identity"`
+	MigrationDerivationAlgorithm string   `json:"migration_derivation_algorithm,omitempty"`
+	AllowedMigrationRemoteStates []string `json:"allowed_migration_remote_states,omitempty"`
 }
 
 type productionConfirmationMaterial struct {
-	Plan                    json.RawMessage `json:"plan"`
-	APIProfile              string          `json:"api_profile"`
-	ClientVersion           string          `json:"client_version"`
-	CanonicalMetadataSHA256 string          `json:"canonical_metadata_sha256"`
-	PayloadSHA256           string          `json:"payload_sha256"`
-	EndpointSequence        []string        `json:"endpoint_sequence"`
-	TokenProviderIdentity   string          `json:"token_provider_identity"`
+	Plan                         json.RawMessage `json:"plan"`
+	APIProfile                   string          `json:"api_profile"`
+	ClientVersion                string          `json:"client_version"`
+	CanonicalMetadataSHA256      string          `json:"canonical_metadata_sha256"`
+	PayloadSHA256                string          `json:"payload_sha256"`
+	EndpointSequence             []string        `json:"endpoint_sequence"`
+	TokenProviderIdentity        string          `json:"token_provider_identity"`
+	MigrationDerivationAlgorithm string          `json:"migration_derivation_algorithm"`
+	AllowedMigrationRemoteStates []string        `json:"allowed_migration_remote_states"`
 }
 
 type rollbackProductionConfirmationMaterial struct {
@@ -62,6 +66,9 @@ func ProductionCanonicalJSON(plan CloudflareDeployPlan, request opscloudflarepay
 	if !validProductionIdentity(identity) {
 		return nil, errors.New("Cloudflare production execution identity is invalid")
 	}
+	if endpointSequenceContainsMigrationReads(identity.EndpointSequence) && (identity.MigrationDerivationAlgorithm != opscloudflarepayload.MigrationDerivationAlgorithm || !equalEndpointSequence(identity.AllowedMigrationRemoteStates, opscloudflarepayload.AllowedMigrationRemoteStates())) {
+		return nil, errors.New("Cloudflare production migration policy identity is invalid")
+	}
 	expectedSequence, err := opscloudflarepayload.EndpointSequence(request)
 	if err != nil || !equalEndpointSequence(identity.EndpointSequence, expectedSequence) {
 		return nil, errors.New("Cloudflare production endpoint sequence is invalid")
@@ -71,8 +78,19 @@ func ProductionCanonicalJSON(plan CloudflareDeployPlan, request opscloudflarepay
 		Plan: planJSON, APIProfile: identity.APIProfile, ClientVersion: identity.ClientVersion,
 		CanonicalMetadataSHA256: hex.EncodeToString(metadataDigest[:]), PayloadSHA256: payloadDigest,
 		EndpointSequence: append([]string(nil), identity.EndpointSequence...), TokenProviderIdentity: identity.TokenProviderIdentity,
+		MigrationDerivationAlgorithm: identity.MigrationDerivationAlgorithm,
+		AllowedMigrationRemoteStates: append([]string(nil), identity.AllowedMigrationRemoteStates...),
 	}
 	return json.Marshal(material)
+}
+
+func endpointSequenceContainsMigrationReads(sequence []string) bool {
+	for _, endpoint := range sequence {
+		if strings.HasPrefix(endpoint, "current-version-detail-read-") {
+			return true
+		}
+	}
+	return false
 }
 
 func equalStringSet(left, right []string) bool {
@@ -150,15 +168,10 @@ func validProductionIdentity(identity ProductionConfirmationIdentity) bool {
 	if !productionIdentityPattern.MatchString(identity.APIProfile) || !productionIdentityPattern.MatchString(identity.ClientVersion) || !productionIdentityPattern.MatchString(identity.TokenProviderIdentity) || len(identity.EndpointSequence) == 0 {
 		return false
 	}
-	seen := make(map[string]struct{}, len(identity.EndpointSequence))
 	for _, endpoint := range identity.EndpointSequence {
 		if !productionIdentityPattern.MatchString(endpoint) || strings.Contains(strings.ToLower(endpoint), "token") {
 			return false
 		}
-		if _, exists := seen[endpoint]; exists {
-			return false
-		}
-		seen[endpoint] = struct{}{}
 	}
 	return true
 }
