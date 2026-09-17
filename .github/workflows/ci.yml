@@ -47,6 +47,20 @@ jobs:
 
       - name: Test
         run: go test ./internal/opscloudflarepayload -run TestIsolationSpike -count=20
+
+  credential-security:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
       - name: Test credential file security
         run: go test -race ./internal/opscredentials -count=1 -timeout=60s
       - name: Repeat credential mutation tests
