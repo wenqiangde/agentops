@@ -29,6 +29,7 @@ type Inventory struct {
 }
 
 type Service struct {
+	Credentials     *Credentials              `yaml:"credentials,omitempty"`
 	Version         int                       `yaml:"version"`
 	ID              string                    `yaml:"id"`
 	Language        string                    `yaml:"language"`
@@ -67,6 +68,7 @@ func (service Service) BuildConfigured() bool {
 }
 
 type Environment struct {
+	Credentials    *Credentials   `yaml:"credentials,omitempty"`
 	Kind           string         `yaml:"kind"`
 	Host           string         `yaml:"host,omitempty"`
 	Root           string         `yaml:"root,omitempty"`

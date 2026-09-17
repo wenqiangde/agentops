@@ -4,6 +4,7 @@ go 1.22
 
 require (
 	github.com/cloudflare/cloudflare-go/v7 v7.7.0
+	github.com/joho/godotenv v1.5.1
 	github.com/spf13/cobra v1.10.2
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a
 	github.com/zeebo/blake3 v0.2.4

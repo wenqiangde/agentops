@@ -8,6 +8,8 @@
     "id": {"type": "string", "minLength": 1, "pattern": "\\S"},
     "language": {"type": "string", "minLength": 1, "pattern": "\\S"},
     "source": {"$ref": "#/$defs/source"},
+    "credentials": {"$ref": "#/$defs/credentials"},
+    "deployment": {"type": "object", "additionalProperties": false, "required": ["requireCommittedScope"], "properties": {"requireCommittedScope": {"type": "boolean"}}},
     "build": {"$ref": "#/$defs/build"},
     "environments": {
       "type": "object",
@@ -15,19 +17,47 @@
       "required": ["local", "production"],
       "properties": {
         "local": {"$ref": "#/$defs/localEnvironment"},
-        "production": {"$ref": "#/$defs/productionEnvironment"}
+        "production": {"oneOf": [{"$ref": "#/$defs/productionEnvironment"}, {"$ref": "#/$defs/cloudflareEnvironment"}]}
       }
     },
     "data": {"$ref": "#/$defs/data"},
     "futureResources": {"type": "object", "additionalProperties": {"$ref": "#/$defs/futureResource"}}
   },
+  "allOf": [
+    {"if": {"required": ["credentials"]}, "then": {"properties": {"environments": {"properties": {"production": {"properties": {"kind": {"const": "cloudflare-workers"}}}}}}}}
+  ],
   "$defs": {
+    "credentials": {
+      "type": "object", "additionalProperties": false,
+      "required": ["provider", "tokenEnv"],
+      "properties": {
+        "provider": {"const": "cloudflare"},
+        "tokenEnv": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
+      }
+    },
+    "cloudflareEnvironment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "runner", "worker", "accountId", "wranglerConfig", "apiProfile"],
+      "properties": {
+        "kind": {"const": "cloudflare-workers"},
+        "runner": {"const": "manual"},
+        "worker": {"type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"},
+        "accountId": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+        "wranglerConfig": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)[^\\u0000-\\u001F\\u007F/](?:[^\\u0000-\\u001F\\u007F]*[^\\u0000-\\u001F\\u007F/])?$"},
+        "apiProfile": {"const": "wrangler-4.107-preveal-v1"},
+        "credentials": {"$ref": "#/$defs/credentials"},
+        "config": {"$ref": "#/$defs/config"},
+        "health": {"$ref": "#/$defs/health"}
+      }
+    },
     "source": {
       "type": "object", "additionalProperties": false,
       "required": ["path", "repository"],
       "properties": {
         "path": {"type": "string", "minLength": 2, "pattern": "^/(?!.*[\\u0000-\\u001F\\u007F])(?!.*//)(?!.*(?:^|/)\\.(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))[^/]+(?:/[^/]+)*$"},
-        "repository": {"type": "string", "minLength": 1, "pattern": "\\S"}
+        "repository": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "repositoryRoot": {"type": "string", "minLength": 2},
+        "deploymentScope": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
       }
     },
     "build": {

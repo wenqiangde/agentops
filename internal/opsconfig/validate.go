@@ -50,6 +50,7 @@ func validateServices(services []Service, hosts map[string]Host) []Issue {
 		}
 		issues = append(issues, validateServiceIdentity(service)...)
 		issues = append(issues, validateBuild(service)...)
+		issues = append(issues, validateServiceCredentials(service)...)
 		for _, name := range []string{EnvironmentLocal, EnvironmentProduction} {
 			if _, exists := service.Environments[name]; !exists {
 				issues = append(issues, issue(service, "environments."+name, "is required"))
@@ -219,6 +220,12 @@ func isCanonicalSourcePath(value string) bool {
 func validateEnvironment(service Service, name string, environment Environment, hosts map[string]Host) []Issue {
 	prefix := "environments." + name + "."
 	var issues []Issue
+	if err := ValidateCredentials(environment.Credentials); err != nil {
+		issues = append(issues, issue(service, prefix+"credentials", err.Error()))
+	}
+	if environment.Credentials != nil && environment.Kind != EnvironmentKindCloudflareWorkers {
+		issues = append(issues, issue(service, prefix+"credentials", "requires cloudflare-workers"))
+	}
 	if name == EnvironmentLocal && environment.Kind != EnvironmentKindLocal {
 		issues = append(issues, issue(service, prefix+"kind", fmt.Sprintf("must be %q", EnvironmentKindLocal)))
 	}
@@ -285,7 +292,7 @@ func validateCloudflareEnvironment(service Service, name, prefix string, environ
 		issues = append(issues, issue(service, prefix+"accountId", "must be a 32 lowercase hexadecimal character Cloudflare account ID"))
 	}
 	config := filepath.Clean(environment.WranglerConfig)
-	if environment.WranglerConfig == "" || filepath.IsAbs(environment.WranglerConfig) || config != environment.WranglerConfig || config == "." || config == ".." || strings.HasPrefix(config, ".."+string(filepath.Separator)) {
+	if environment.WranglerConfig == "" || strings.ContainsAny(environment.WranglerConfig, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f") || filepath.IsAbs(environment.WranglerConfig) || config != environment.WranglerConfig || config == "." || config == ".." || strings.HasPrefix(config, ".."+string(filepath.Separator)) {
 		issues = append(issues, issue(service, prefix+"wranglerConfig", "must be a clean relative path within the source root"))
 	}
 	if environment.APIProfile != "wrangler-4.107-preveal-v1" {
