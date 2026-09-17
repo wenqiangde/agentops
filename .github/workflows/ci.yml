@@ -31,6 +31,9 @@ jobs:
         run: go build ./cmd/agentops
 
   isolation-spike:
+    # Go 1.22's internal linker does not emit the UUID required by newer macOS.
+    env:
+      GOFLAGS: ${{ matrix.os == 'macos-latest' && '-ldflags=-linkmode=external' || '' }}
     strategy:
       fail-fast: false
       matrix:
@@ -49,6 +52,8 @@ jobs:
         run: go test ./internal/opscloudflarepayload -run TestIsolationSpike -count=20
 
   credential-security:
+    env:
+      GOFLAGS: ${{ matrix.os == 'macos-latest' && '-ldflags=-linkmode=external' || '' }}
     strategy:
       fail-fast: false
       matrix:
