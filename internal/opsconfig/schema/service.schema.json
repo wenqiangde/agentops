@@ -2,171 +2,795 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "id", "language", "source", "environments"],
-  "properties": {
-    "version": {"const": 1},
-    "id": {"type": "string", "minLength": 1, "pattern": "\\S"},
-    "language": {"type": "string", "minLength": 1, "pattern": "\\S"},
-    "source": {"$ref": "#/$defs/source"},
-    "credentials": {"$ref": "#/$defs/credentials"},
-    "deployment": {"type": "object", "additionalProperties": false, "required": ["requireCommittedScope"], "properties": {"requireCommittedScope": {"type": "boolean"}}},
-    "build": {"$ref": "#/$defs/build"},
-    "environments": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["local", "production"],
-      "properties": {
-        "local": {"$ref": "#/$defs/localEnvironment"},
-        "production": {"oneOf": [{"$ref": "#/$defs/productionEnvironment"}, {"$ref": "#/$defs/cloudflareEnvironment"}]}
-      }
-    },
-    "data": {"$ref": "#/$defs/data"},
-    "futureResources": {"type": "object", "additionalProperties": {"$ref": "#/$defs/futureResource"}}
-  },
-  "allOf": [
-    {"if": {"required": ["credentials"]}, "then": {"properties": {"environments": {"properties": {"production": {"properties": {"kind": {"const": "cloudflare-workers"}}}}}}}}
+  "required": [
+    "version",
+    "id",
+    "language",
+    "source",
+    "environments"
   ],
-  "$defs": {
-    "credentials": {
-      "type": "object", "additionalProperties": false,
-      "required": ["provider", "tokenEnv"],
-      "properties": {
-        "provider": {"const": "cloudflare"},
-        "tokenEnv": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}
-      }
+  "properties": {
+    "version": {
+      "const": 1
     },
-    "cloudflareEnvironment": {
-      "type": "object", "additionalProperties": false,
-      "required": ["kind", "runner", "worker", "accountId", "wranglerConfig", "apiProfile"],
-      "properties": {
-        "kind": {"const": "cloudflare-workers"},
-        "runner": {"const": "manual"},
-        "worker": {"type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"},
-        "accountId": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
-        "wranglerConfig": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)[^\\u0000-\\u001F\\u007F/](?:[^\\u0000-\\u001F\\u007F]*[^\\u0000-\\u001F\\u007F/])?$"},
-        "apiProfile": {"const": "wrangler-4.107-preveal-v1"},
-        "credentials": {"$ref": "#/$defs/credentials"},
-        "config": {"$ref": "#/$defs/config"},
-        "health": {"$ref": "#/$defs/health"}
-      }
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "language": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
     },
     "source": {
-      "type": "object", "additionalProperties": false,
-      "required": ["path", "repository"],
+      "$ref": "#/$defs/source"
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requireCommittedScope"
+      ],
       "properties": {
-        "path": {"type": "string", "minLength": 2, "pattern": "^/(?!.*[\\u0000-\\u001F\\u007F])(?!.*//)(?!.*(?:^|/)\\.(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))[^/]+(?:/[^/]+)*$"},
-        "repository": {"type": "string", "minLength": 1, "pattern": "\\S"},
-        "repositoryRoot": {"type": "string", "minLength": 2},
-        "deploymentScope": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+        "requireCommittedScope": {
+          "type": "boolean"
+        }
       }
     },
     "build": {
-      "type": "object", "additionalProperties": false,
-      "required": ["adapter", "command", "artifact", "manifest"],
+      "$ref": "#/$defs/build"
+    },
+    "environments": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "local",
+        "production"
+      ],
       "properties": {
-        "adapter": {"type": "string", "minLength": 1, "pattern": "\\S"}, "command": {"type": "string", "minLength": 1, "pattern": "\\S"},
-        "artifact": {"type": "string", "minLength": 1, "pattern": "^(?=.*\\S)(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*(?:^|/)\\.(?:/|$))(?!.*//).*[^/]$"},
-        "manifest": {"type": "string", "minLength": 1, "pattern": "^(?=.*\\S)(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*(?:^|/)\\.(?:/|$))(?!.*//).*[^/]$"}
+        "local": {
+          "$ref": "#/$defs/localEnvironment"
+        },
+        "production": {
+          "$ref": "#/$defs/productionEnvironment"
+        }
+      }
+    },
+    "data": {
+      "$ref": "#/$defs/data"
+    },
+    "futureResources": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/futureResource"
+      }
+    }
+  },
+  "$defs": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "repository"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 2,
+          "pattern": "^/(?!.*[\\u0000-\\u001F\\u007F])(?!.*//)(?!.*(?:^|/)\\.(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))[^/]+(?:/[^/]+)*$"
+        },
+        "repository": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "repositoryRoot": {
+          "type": "string",
+          "minLength": 2
+        },
+        "deploymentScope": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter",
+        "command",
+        "artifact",
+        "manifest"
+      ],
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "artifact": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?=.*\\S)(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*(?:^|/)\\.(?:/|$))(?!.*//).*[^/]$"
+        },
+        "manifest": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?=.*\\S)(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*(?:^|/)\\.(?:/|$))(?!.*//).*[^/]$"
+        }
       }
     },
     "config": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "files": {"type": "array", "items": {"type": "string"}},
-        "requiredKeys": {"type": "array", "items": {"type": "string"}},
-        "secretKeys": {"type": "array", "items": {"type": "string"}, "description": "Names of externally supplied secrets; values are forbidden."}
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requiredKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "secretKeys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Names of externally supplied secrets; values are forbidden."
+        }
       }
     },
     "health": {
-      "type": "object", "additionalProperties": false,
+      "type": "object",
+      "additionalProperties": false,
       "properties": {
-        "type": {"enum": ["process", "tcp", "http", "command"]}, "url": {"type": "string", "minLength": 1, "pattern": "^https?://(?![^/?#]*@)[^/?#\\s]+(?:[/?#].*)?$"},
-        "address": {"type": "string", "minLength": 1, "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*|\\[[0-9A-Fa-f:.]+\\]):(?:[1-9]|[1-9][0-9]{1,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"}, "command": {"$ref": "#/$defs/commandProbe"},
-        "successStatuses": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "integer", "minimum": 100, "maximum": 599}}
+        "type": {
+          "enum": [
+            "process",
+            "tcp",
+            "http",
+            "command"
+          ]
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^https?://(?![^/?#]*@)[^/?#\\s]+(?:[/?#].*)?$"
+        },
+        "address": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?:[A-Za-z0-9][A-Za-z0-9._-]*|\\[[0-9A-Fa-f:.]+\\]):(?:[1-9]|[1-9][0-9]{1,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+        },
+        "command": {
+          "$ref": "#/$defs/commandProbe"
+        },
+        "successStatuses": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 599
+          }
+        }
       },
-      "required": ["type"],
+      "required": [
+        "type"
+      ],
       "allOf": [
-        {"if": {"properties": {"type": {"const": "http"}}}, "then": {"required": ["url", "successStatuses"], "properties": {"address": false, "command": false}}},
-        {"if": {"properties": {"type": {"const": "tcp"}}}, "then": {"required": ["address"], "properties": {"url": false, "command": false, "successStatuses": false}}},
-        {"if": {"properties": {"type": {"const": "command"}}}, "then": {"required": ["command"], "properties": {"url": false, "address": false, "successStatuses": false}}},
-        {"if": {"properties": {"type": {"const": "process"}}}, "then": {"properties": {"url": false, "address": false, "command": false, "successStatuses": false}}}
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "http"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "url",
+              "successStatuses"
+            ],
+            "properties": {
+              "address": false,
+              "command": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "tcp"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "address"
+            ],
+            "properties": {
+              "url": false,
+              "command": false,
+              "successStatuses": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "command"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "command"
+            ],
+            "properties": {
+              "url": false,
+              "address": false,
+              "successStatuses": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "process"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "url": false,
+              "address": false,
+              "command": false,
+              "successStatuses": false
+            }
+          }
+        }
       ]
     },
     "commandProbe": {
-      "type": "object", "additionalProperties": false, "required": ["program"],
-      "properties": {"program": {"type": "string", "minLength": 1, "pattern": "^[^\\x00-\\x1F\\x7F]+$"}, "args": {"type": "array", "items": {"type": "string", "pattern": "^[^\\x00-\\x1F\\x7F]*$"}}}
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "program"
+      ],
+      "properties": {
+        "program": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[^\\x00-\\x1F\\x7F]+$"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[^\\x00-\\x1F\\x7F]*$"
+          }
+        }
+      }
     },
     "data": {
-      "type": "object", "additionalProperties": false,
-      "properties": {"mysql": {"$ref": "#/$defs/mysql"}}
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mysql": {
+          "$ref": "#/$defs/mysql"
+        }
+      }
     },
     "mysql": {
-      "type": "object", "additionalProperties": false,
-      "required": ["resource", "migrationCommand", "backupPolicy"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "resource",
+        "migrationCommand",
+        "backupPolicy"
+      ],
       "properties": {
-        "resource": {"type": "string"},
-        "migrationCommand": {"type": "string"},
-        "backupPolicy": {"type": "string"}
+        "resource": {
+          "type": "string"
+        },
+        "migrationCommand": {
+          "type": "string"
+        },
+        "backupPolicy": {
+          "type": "string"
+        }
       }
     },
     "runnerFields": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["runner"],
+      "required": [
+        "runner"
+      ],
       "properties": {
-        "runner": {"enum": ["systemd", "php-fpm", "pm2", "process", "manual"]},
-        "unit": {"type": "string"}, "service": {"type": "string"}, "app": {"type": "string"},
-        "configOwner": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"}, "configPath": {"type": "string", "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"}, "user": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"},
-        "command": {"type": "string"}, "pidfile": {"type": "string"},
-        "shutdownSignal": {"type": "string"}, "logs": {"type": "string"}
+        "runner": {
+          "enum": [
+            "systemd",
+            "php-fpm",
+            "pm2",
+            "process",
+            "manual"
+          ]
+        },
+        "unit": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "app": {
+          "type": "string"
+        },
+        "configOwner": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"
+        },
+        "configPath": {
+          "type": "string",
+          "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"
+        },
+        "user": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"
+        },
+        "command": {
+          "type": "string"
+        },
+        "pidfile": {
+          "type": "string"
+        },
+        "shutdownSignal": {
+          "type": "string"
+        },
+        "logs": {
+          "type": "string"
+        }
       }
     },
     "localEnvironment": {
-      "type": "object", "additionalProperties": false,
-      "required": ["kind", "runner"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "runner"
+      ],
       "properties": {
-        "kind": {"const": "local"},
-        "runner": {"enum": ["systemd", "php-fpm", "pm2", "process", "manual"]},
-        "unit": {"type": "string"}, "service": {"type": "string"}, "app": {"type": "string"},
-        "configOwner": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"}, "configPath": {"type": "string", "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"}, "user": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"},
-        "command": {"type": "string", "pattern": "^/[A-Za-z0-9_+@-][A-Za-z0-9_+@.-]*(?:/[A-Za-z0-9_+@-][A-Za-z0-9_+@.-]*)*$"}, "pidfile": {"type": "string", "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"},
-        "shutdownSignal": {"enum": ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"]}, "logs": {"type": "string", "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"},
-        "config": {"$ref": "#/$defs/config"}, "health": {"$ref": "#/$defs/health"}
+        "kind": {
+          "const": "local"
+        },
+        "runner": {
+          "enum": [
+            "systemd",
+            "php-fpm",
+            "pm2",
+            "process",
+            "manual"
+          ]
+        },
+        "unit": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "app": {
+          "type": "string"
+        },
+        "configOwner": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"
+        },
+        "configPath": {
+          "type": "string",
+          "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"
+        },
+        "user": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"
+        },
+        "command": {
+          "type": "string",
+          "pattern": "^/[A-Za-z0-9_+@-][A-Za-z0-9_+@.-]*(?:/[A-Za-z0-9_+@-][A-Za-z0-9_+@.-]*)*$"
+        },
+        "pidfile": {
+          "type": "string",
+          "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"
+        },
+        "shutdownSignal": {
+          "enum": [
+            "SIGTERM",
+            "SIGINT",
+            "SIGHUP",
+            "SIGQUIT"
+          ]
+        },
+        "logs": {
+          "type": "string",
+          "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"
+        },
+        "config": {
+          "$ref": "#/$defs/config"
+        },
+        "health": {
+          "$ref": "#/$defs/health"
+        }
       },
       "allOf": [
-        {"if": {"properties": {"runner": {"const": "systemd"}}}, "then": {"required": ["unit"], "properties": {"service": false, "app": false, "command": false, "pidfile": false, "shutdownSignal": false, "logs": false, "configOwner": false, "configPath": false, "user": false}}},
-        {"if": {"properties": {"runner": {"const": "php-fpm"}}}, "then": {"required": ["service", "configOwner", "configPath"], "properties": {"unit": false, "app": false, "command": false, "pidfile": false, "shutdownSignal": false, "logs": false, "user": false}}},
-        {"if": {"properties": {"runner": {"const": "pm2"}}}, "then": {"required": ["app", "configOwner", "configPath"], "properties": {"unit": false, "service": false, "command": false, "pidfile": false, "shutdownSignal": false, "logs": false, "user": false}}},
-        {"if": {"properties": {"runner": {"const": "process"}}}, "then": {"required": ["user", "command", "pidfile", "shutdownSignal", "logs"], "properties": {"unit": false, "service": false, "app": false, "configOwner": false, "configPath": false}}},
-        {"if": {"properties": {"runner": {"const": "manual"}}}, "then": {"properties": {"unit": false, "service": false, "app": false, "command": false, "pidfile": false, "shutdownSignal": false, "logs": false, "configOwner": false, "configPath": false, "user": false}}}
+        {
+          "if": {
+            "properties": {
+              "runner": {
+                "const": "systemd"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "unit"
+            ],
+            "properties": {
+              "service": false,
+              "app": false,
+              "command": false,
+              "pidfile": false,
+              "shutdownSignal": false,
+              "logs": false,
+              "configOwner": false,
+              "configPath": false,
+              "user": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "runner": {
+                "const": "php-fpm"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "service",
+              "configOwner",
+              "configPath"
+            ],
+            "properties": {
+              "unit": false,
+              "app": false,
+              "command": false,
+              "pidfile": false,
+              "shutdownSignal": false,
+              "logs": false,
+              "user": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "runner": {
+                "const": "pm2"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "app",
+              "configOwner",
+              "configPath"
+            ],
+            "properties": {
+              "unit": false,
+              "service": false,
+              "command": false,
+              "pidfile": false,
+              "shutdownSignal": false,
+              "logs": false,
+              "user": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "runner": {
+                "const": "process"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "user",
+              "command",
+              "pidfile",
+              "shutdownSignal",
+              "logs"
+            ],
+            "properties": {
+              "unit": false,
+              "service": false,
+              "app": false,
+              "configOwner": false,
+              "configPath": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "runner": {
+                "const": "manual"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": false,
+              "service": false,
+              "app": false,
+              "command": false,
+              "pidfile": false,
+              "shutdownSignal": false,
+              "logs": false,
+              "configOwner": false,
+              "configPath": false,
+              "user": false
+            }
+          }
+        }
       ]
     },
     "productionEnvironment": {
-      "type": "object", "additionalProperties": false,
-      "required": ["kind", "host", "root", "runner"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "host",
+        "root",
+        "runner"
+      ],
       "properties": {
-        "kind": {"const": "ssh"}, "host": {"type": "string", "minLength": 1, "pattern": "\\S"},
-        "root": {"type": "string", "minLength": 1, "pattern": "^/(?!.*//)(?!.*(?:^|/)\\.(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))[^/]+(?:/[^/]+)*$"},
-        "runner": {"enum": ["systemd", "php-fpm", "pm2", "process", "manual"]},
-        "unit": {"type": "string"}, "service": {"type": "string"}, "app": {"type": "string"},
-        "configOwner": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"}, "configPath": {"type": "string", "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"}, "user": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"},
-        "command": {"type": "string", "pattern": "^(?:/|\\./)?[A-Za-z0-9_+@-][A-Za-z0-9_+@.-]*(?:/[A-Za-z0-9_+@-][A-Za-z0-9_+@.-]*)*$"}, "pidfile": {"type": "string", "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"},
-        "shutdownSignal": {"enum": ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"]}, "logs": {"type": "string", "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"},
-        "config": {"$ref": "#/$defs/config"}, "health": {"$ref": "#/$defs/health"}
+        "kind": {
+          "const": "ssh"
+        },
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "\\S"
+        },
+        "root": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^/(?!.*//)(?!.*(?:^|/)\\.(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))[^/]+(?:/[^/]+)*$"
+        },
+        "runner": {
+          "enum": [
+            "systemd",
+            "php-fpm",
+            "pm2",
+            "process",
+            "manual"
+          ]
+        },
+        "unit": {
+          "type": "string"
+        },
+        "service": {
+          "type": "string"
+        },
+        "app": {
+          "type": "string"
+        },
+        "configOwner": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"
+        },
+        "configPath": {
+          "type": "string",
+          "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"
+        },
+        "user": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$"
+        },
+        "command": {
+          "type": "string",
+          "pattern": "^(?:/|\\./)?[A-Za-z0-9_+@-][A-Za-z0-9_+@.-]*(?:/[A-Za-z0-9_+@-][A-Za-z0-9_+@.-]*)*$"
+        },
+        "pidfile": {
+          "type": "string",
+          "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"
+        },
+        "shutdownSignal": {
+          "enum": [
+            "SIGTERM",
+            "SIGINT",
+            "SIGHUP",
+            "SIGQUIT"
+          ]
+        },
+        "logs": {
+          "type": "string",
+          "pattern": "^/(?!.*(?:/\\.\\.?)(?:/|$))(?!.*//)[^\\r\\n\\u0000]+$"
+        },
+        "config": {
+          "$ref": "#/$defs/config"
+        },
+        "health": {
+          "$ref": "#/$defs/health"
+        }
       },
       "allOf": [
-        {"if": {"properties": {"runner": {"const": "systemd"}}}, "then": {"required": ["unit"], "properties": {"service": false, "app": false, "command": false, "pidfile": false, "shutdownSignal": false, "logs": false, "configOwner": false, "configPath": false, "user": false}}},
-        {"if": {"properties": {"runner": {"const": "php-fpm"}}}, "then": {"required": ["service", "configOwner", "configPath"], "properties": {"unit": false, "app": false, "command": false, "pidfile": false, "shutdownSignal": false, "logs": false, "user": false}}},
-        {"if": {"properties": {"runner": {"const": "pm2"}}}, "then": {"required": ["app", "configOwner", "configPath"], "properties": {"unit": false, "service": false, "command": false, "pidfile": false, "shutdownSignal": false, "logs": false, "user": false}}},
-        {"if": {"properties": {"runner": {"const": "process"}}}, "then": {"required": ["user", "command", "pidfile", "shutdownSignal", "logs"], "properties": {"unit": false, "service": false, "app": false, "configOwner": false, "configPath": false}}},
-        {"if": {"properties": {"runner": {"const": "manual"}}}, "then": {"properties": {"unit": false, "service": false, "app": false, "command": false, "pidfile": false, "shutdownSignal": false, "logs": false, "configOwner": false, "configPath": false, "user": false}}}
+        {
+          "if": {
+            "properties": {
+              "runner": {
+                "const": "systemd"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "unit"
+            ],
+            "properties": {
+              "service": false,
+              "app": false,
+              "command": false,
+              "pidfile": false,
+              "shutdownSignal": false,
+              "logs": false,
+              "configOwner": false,
+              "configPath": false,
+              "user": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "runner": {
+                "const": "php-fpm"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "service",
+              "configOwner",
+              "configPath"
+            ],
+            "properties": {
+              "unit": false,
+              "app": false,
+              "command": false,
+              "pidfile": false,
+              "shutdownSignal": false,
+              "logs": false,
+              "user": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "runner": {
+                "const": "pm2"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "app",
+              "configOwner",
+              "configPath"
+            ],
+            "properties": {
+              "unit": false,
+              "service": false,
+              "command": false,
+              "pidfile": false,
+              "shutdownSignal": false,
+              "logs": false,
+              "user": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "runner": {
+                "const": "process"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "user",
+              "command",
+              "pidfile",
+              "shutdownSignal",
+              "logs"
+            ],
+            "properties": {
+              "unit": false,
+              "service": false,
+              "app": false,
+              "configOwner": false,
+              "configPath": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "runner": {
+                "const": "manual"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": false,
+              "service": false,
+              "app": false,
+              "command": false,
+              "pidfile": false,
+              "shutdownSignal": false,
+              "logs": false,
+              "configOwner": false,
+              "configPath": false,
+              "user": false
+            }
+          }
+        }
       ]
     },
     "futureResource": {
-      "type": "object", "additionalProperties": false, "required": ["status"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
       "properties": {
-        "status": {"type": "string"},
-        "intendedRoles": {"type": "array", "items": {"type": "string"}}
+        "status": {
+          "type": "string"
+        },
+        "intendedRoles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     }
   }

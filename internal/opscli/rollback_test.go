@@ -3,50 +3,15 @@ package opscli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/wenqiangde/agentops/internal/opscloudflare"
 	"github.com/wenqiangde/agentops/internal/opsexec"
-	"github.com/wenqiangde/agentops/internal/opsreport"
 )
-
-func TestCloudflareRollbackFailureReportPersistsTypedUnknownStateIdentity(t *testing.T) {
-	root := t.TempDir()
-	plan := opscloudflare.CloudflareRollbackPlan{
-		Service: "example-relay", Environment: "production", Worker: "example-worker",
-		DeploymentInputSHA256: strings.Repeat("b", 64), TargetVersionID: "11111111-1111-4111-8111-111111111111",
-		CurrentDeploymentID: "33333333-3333-4333-8333-333333333333",
-	}
-	result := opscloudflare.RollbackResult{
-		ProductionWriteSucceeded: true,
-		DeploymentID:             "22222222-2222-4222-8222-222222222222",
-		VersionID:                plan.TargetVersionID,
-	}
-	var output bytes.Buffer
-	started := time.Date(2026, 9, 15, 1, 2, 3, 0, time.UTC)
-	if err := writeCloudflareRollbackFailureReport(root, strings.Repeat("a", 64), plan, result, started, started.Add(time.Second), &output); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("reports=%v err=%v", entries, err)
-	}
-	data, err := os.ReadFile(filepath.Join(root, entries[0].Name()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var report opsreport.Report
-	if json.Unmarshal(data, &report) != nil || report.Cloudflare == nil || report.Cloudflare.Outcome != opsreport.CloudflareUnknownState || report.Terminal || report.Cloudflare.PreviousDeploymentID != plan.CurrentDeploymentID || report.Cloudflare.DeploymentID != result.DeploymentID || len(report.Cloudflare.VersionIDs) != 1 || report.Cloudflare.VersionIDs[0] != result.VersionID {
-		t.Fatalf("typed rollback unknown-state identity missing: %s", data)
-	}
-}
 
 type cliRollbackExecutor struct {
 	runs            []opsexec.Request
@@ -173,82 +138,6 @@ func TestOpsRollbackPreviewStaleAndConfirm(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(p.OpsReportRoot, reports[0].Name()))
 	if err != nil || !strings.Contains(string(data), `"requested_version": "1.5.0"`) || !strings.Contains(string(data), `"previous_version": "2.0.0"`) {
 		t.Fatalf("report=%q err=%v", data, err)
-	}
-}
-
-func TestOpsRollbackRejectsCloudflareProductionWriteWhileSecurityGateIsClosed(t *testing.T) {
-	p := opsTestPaths(t, "valid")
-	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
-	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
-	target := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	args := []string{"ops", "rollback", "example-relay", "--environment", "production", "--version", target}
-
-	previewExecutor := successfulCLICloudflareRollbackExecutor(target)
-	original := opsCloudflareExecutor
-	opsCloudflareExecutor = func() opsexec.Executor { return previewExecutor }
-	t.Cleanup(func() { opsCloudflareExecutor = original })
-	var preview, previewErr bytes.Buffer
-	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
-		t.Fatalf("preview code=%d out=%q err=%q", code, preview.String(), previewErr.String())
-	}
-
-	confirmedExecutor := successfulCLICloudflareRollbackExecutor(target)
-	opsCloudflareExecutor = func() opsexec.Executor { return confirmedExecutor }
-	var stdout, stderr bytes.Buffer
-	confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
-	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "rollback apply failed") {
-		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
-	}
-	if hasCloudflareRollback(confirmedExecutor.requests) {
-		t.Fatalf("security gate allowed production rollback: %+v", confirmedExecutor.requests)
-	}
-}
-
-func successfulCLICloudflareRollbackExecutor(target string) *cliCloudflareExecutor {
-	return &cliCloudflareExecutor{results: []opsexec.Result{
-		{ExitCode: 0, Stdout: "4.107.0\n"},
-		{ExitCode: 0, Stdout: `{"accounts":[{"id":"0123456789abcdef0123456789abcdef"}]}`},
-		{ExitCode: 0, Stdout: `[{"id":"` + target + `"}]`},
-		{ExitCode: 0, Stdout: `{"id":"11111111-1111-4111-8111-111111111111","versions":[{"version_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","percentage":100}]}`},
-	}}
-}
-
-func hasCloudflareRollback(requests []opsexec.Request) bool {
-	for _, request := range requests {
-		if len(request.Args) > 0 && request.Args[0] == "rollback" {
-			return true
-		}
-	}
-	return false
-}
-
-func TestOpsRollbackRejectsSnapshotDriftBeforeProductionCommand(t *testing.T) {
-	p := opsTestPaths(t, "valid")
-	repositoryRoot, sourcePath := newCLICloudflareRepository(t)
-	writeCLICloudflareService(t, p.OperationsRoot, repositoryRoot, sourcePath)
-	target := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
-	args := []string{"ops", "rollback", "example-relay", "--environment", "production", "--version", target}
-	previewExecutor := successfulCLICloudflareRollbackExecutor(target)
-	stubCLICloudflareExecutor(t, previewExecutor)
-	var preview, previewErr bytes.Buffer
-	if code, _ := executeRootCommand(p, args, &preview, &previewErr); code != 0 {
-		t.Fatalf("preview code=%d err=%q", code, previewErr.String())
-	}
-	confirmedExecutor := successfulCLICloudflareRollbackExecutor(target)
-	confirmedExecutor.afterRun = func(request opsexec.Request) {
-		if len(request.Args) > 1 && request.Args[0] == "deployments" && request.Args[1] == "status" {
-			writeCLIFile(t, filepath.Join(request.Directory, "src", "index.ts"), "snapshot changed\n", 0o644)
-			confirmedExecutor.afterRun = nil
-		}
-	}
-	stubCLICloudflareExecutor(t, confirmedExecutor)
-	var stdout, stderr bytes.Buffer
-	confirmArgs := append(append([]string(nil), args...), "--confirm", "--preview-digest", previewDigest(t, preview.String()))
-	if code, _ := executeRootCommand(p, confirmArgs, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "stale") {
-		t.Fatalf("code=%d out=%q err=%q", code, stdout.String(), stderr.String())
-	}
-	if hasCloudflareRollback(confirmedExecutor.requests) {
-		t.Fatalf("changed snapshot executed rollback: %+v", confirmedExecutor.requests)
 	}
 }
 

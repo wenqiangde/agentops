@@ -90,15 +90,6 @@ func opsDeploy(p paths.Paths, args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
-	cloudflareProduction, cloudflareFound := service.Environments[opsconfig.EnvironmentProduction]
-	if cloudflareFound && cloudflareProduction.Kind == opsconfig.EnvironmentKindCloudflareWorkers {
-		timeout, err := time.ParseDuration(inv.Policies.Execution.DefaultTimeout)
-		if err != nil || timeout <= 0 {
-			fmt.Fprintln(stderr, "agentops: invalid default operation timeout")
-			return 1
-		}
-		return opsCloudflareDeploy(p.OpsReportRoot, service, cloudflareProduction, requestedVersion, confirm, previewDigest, timeout, stdout, stderr)
-	}
 	if !service.BuildConfigured() {
 		fmt.Fprintln(stderr, "agentops: service has no managed build/deploy configuration")
 		return 1
@@ -490,10 +481,6 @@ func opsList(p paths.Paths, args []string, stdout io.Writer, stderr io.Writer) i
 			continue
 		}
 		local := service.Environments[opsconfig.EnvironmentLocal]
-		if production.Kind == opsconfig.EnvironmentKindCloudflareWorkers {
-			fmt.Fprintf(stdout, "%s\t%s\tlocal=%s\tproduction=%s\tworker=%s\n", service.ID, service.Language, local.Runner, production.Runner, production.Worker)
-			continue
-		}
 		fmt.Fprintf(stdout, "%s\t%s\tlocal=%s\tproduction=%s\thost=%s\n", service.ID, service.Language, local.Runner, production.Runner, production.Host)
 	}
 	printOpsIssues(stderr, issues)
@@ -545,9 +532,6 @@ func opsInspect(p paths.Paths, args []string, stdout io.Writer, stderr io.Writer
 		}
 		if item.Root != "" {
 			fmt.Fprintf(stdout, "root: %s\n", item.Root)
-		}
-		if item.Worker != "" {
-			fmt.Fprintf(stdout, "worker: %s\nwrangler-config: %s\n", item.Worker, item.WranglerConfig)
 		}
 		runnerEnvironment := item
 		var executor opsexec.Executor

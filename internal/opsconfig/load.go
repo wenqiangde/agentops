@@ -145,12 +145,7 @@ func findSecretValue(data []byte) *Issue {
 					childPath = path + "." + field
 				}
 				childPlanning := planning || field == "futureResources"
-				credentialPath := childPath == "credentials" || childPath == "environments.production.credentials" || childPath == "environments.local.credentials"
-				if credentialPath && (value.Kind != yaml.MappingNode || value.Tag == "!!null") {
-					return &Issue{Field: childPath, Message: "credentials must be a non-null mapping"}
-				}
-				reference := field == "tokenEnv" && (path == "credentials" || path == "environments.production.credentials" || path == "environments.local.credentials")
-				if !childPlanning && !reference && isSecretField(field) && hasConfiguredValue(value) {
+				if !childPlanning && isSecretField(field) && hasConfiguredValue(value) {
 					return &Issue{Field: childPath, Message: "secret value is not allowed; use a secret reference"}
 				}
 				if issue := walk(value, childPath, childPlanning); issue != nil {

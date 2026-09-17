@@ -6,9 +6,8 @@ const (
 	EnvironmentLocal      = "local"
 	EnvironmentProduction = "production"
 
-	EnvironmentKindLocal             = "local"
-	EnvironmentKindSSH               = "ssh"
-	EnvironmentKindCloudflareWorkers = "cloudflare-workers"
+	EnvironmentKindLocal = "local"
+	EnvironmentKindSSH   = "ssh"
 
 	RunnerSystemd = "systemd"
 	RunnerPHPFPM  = "php-fpm"
@@ -18,7 +17,7 @@ const (
 )
 
 var (
-	EnvironmentKinds = []string{EnvironmentKindLocal, EnvironmentKindSSH, EnvironmentKindCloudflareWorkers}
+	EnvironmentKinds = []string{EnvironmentKindLocal, EnvironmentKindSSH}
 	RunnerKinds      = []string{RunnerSystemd, RunnerPHPFPM, RunnerPM2, RunnerProcess, RunnerManual}
 )
 
@@ -29,7 +28,6 @@ type Inventory struct {
 }
 
 type Service struct {
-	Credentials     *Credentials              `yaml:"credentials,omitempty"`
 	Version         int                       `yaml:"version"`
 	ID              string                    `yaml:"id"`
 	Language        string                    `yaml:"language"`
@@ -68,7 +66,6 @@ func (service Service) BuildConfigured() bool {
 }
 
 type Environment struct {
-	Credentials    *Credentials   `yaml:"credentials,omitempty"`
 	Kind           string         `yaml:"kind"`
 	Host           string         `yaml:"host,omitempty"`
 	Root           string         `yaml:"root,omitempty"`
@@ -83,10 +80,6 @@ type Environment struct {
 	PIDFile        string         `yaml:"pidfile,omitempty"`
 	ShutdownSignal string         `yaml:"shutdownSignal,omitempty"`
 	Logs           string         `yaml:"logs,omitempty"`
-	Worker         string         `yaml:"worker,omitempty"`
-	AccountID      string         `yaml:"accountId,omitempty"`
-	WranglerConfig string         `yaml:"wranglerConfig,omitempty"`
-	APIProfile     string         `yaml:"apiProfile,omitempty"`
 	Config         ConfigContract `yaml:"config,omitempty"`
 	Health         Health         `yaml:"health,omitempty"`
 }

@@ -27,8 +27,6 @@ var durationPattern = regexp.MustCompile(DurationPattern)
 var sshAliasPattern = regexp.MustCompile(SSHAliasPattern)
 var configOwnerPattern = regexp.MustCompile(ConfigOwnerPattern)
 var processCommandPattern = regexp.MustCompile(ProcessCommandPattern)
-var cloudflareWorkerPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
-var cloudflareAccountIDPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func validateServices(services []Service, hosts map[string]Host) []Issue {
 	byID := make(map[string][]Service)
@@ -50,7 +48,6 @@ func validateServices(services []Service, hosts map[string]Host) []Issue {
 		}
 		issues = append(issues, validateServiceIdentity(service)...)
 		issues = append(issues, validateBuild(service)...)
-		issues = append(issues, validateServiceCredentials(service)...)
 		for _, name := range []string{EnvironmentLocal, EnvironmentProduction} {
 			if _, exists := service.Environments[name]; !exists {
 				issues = append(issues, issue(service, "environments."+name, "is required"))
@@ -176,9 +173,8 @@ func validateServiceIdentity(service Service) []Issue {
 func validateDeploymentSource(service Service) []Issue {
 	root := service.Source.RepositoryRoot
 	scopes := service.Source.DeploymentScope
-	cloudflare := service.Environments[EnvironmentProduction].Kind == EnvironmentKindCloudflareWorkers
 	var issues []Issue
-	if root == "" && len(scopes) == 0 && !cloudflare {
+	if root == "" && len(scopes) == 0 {
 		return issues
 	}
 	if !isCanonicalSourcePath(root) {
@@ -220,17 +216,11 @@ func isCanonicalSourcePath(value string) bool {
 func validateEnvironment(service Service, name string, environment Environment, hosts map[string]Host) []Issue {
 	prefix := "environments." + name + "."
 	var issues []Issue
-	if err := ValidateCredentials(environment.Credentials); err != nil {
-		issues = append(issues, issue(service, prefix+"credentials", err.Error()))
-	}
-	if environment.Credentials != nil && environment.Kind != EnvironmentKindCloudflareWorkers {
-		issues = append(issues, issue(service, prefix+"credentials", "requires cloudflare-workers"))
-	}
 	if name == EnvironmentLocal && environment.Kind != EnvironmentKindLocal {
 		issues = append(issues, issue(service, prefix+"kind", fmt.Sprintf("must be %q", EnvironmentKindLocal)))
 	}
-	if name == EnvironmentProduction && environment.Kind != EnvironmentKindSSH && environment.Kind != EnvironmentKindCloudflareWorkers {
-		issues = append(issues, issue(service, prefix+"kind", fmt.Sprintf("must be %q or %q", EnvironmentKindSSH, EnvironmentKindCloudflareWorkers)))
+	if name == EnvironmentProduction && environment.Kind != EnvironmentKindSSH {
+		issues = append(issues, issue(service, prefix+"kind", "must be ssh; Cloudflare operations have been removed, use the official Cloudflare tooling"))
 	}
 	if name == EnvironmentProduction && environment.Kind == EnvironmentKindSSH {
 		host, exists := hosts[environment.Host]
@@ -250,54 +240,8 @@ func validateEnvironment(service Service, name string, environment Environment, 
 			issues = append(issues, issue(service, prefix+"root", "is only allowed for production"))
 		}
 	}
-	issues = append(issues, validateCloudflareEnvironment(service, name, prefix, environment)...)
 	issues = append(issues, validateRunner(service, name, prefix, environment)...)
 	issues = append(issues, validateHealth(service, prefix, environment.Health)...)
-	return issues
-}
-
-func validateCloudflareEnvironment(service Service, name, prefix string, environment Environment) []Issue {
-	var issues []Issue
-	if environment.Kind != EnvironmentKindCloudflareWorkers {
-		if environment.Worker != "" {
-			issues = append(issues, issue(service, prefix+"worker", "is only allowed for cloudflare-workers"))
-		}
-		if environment.WranglerConfig != "" {
-			issues = append(issues, issue(service, prefix+"wranglerConfig", "is only allowed for cloudflare-workers"))
-		}
-		if environment.AccountID != "" {
-			issues = append(issues, issue(service, prefix+"accountId", "is only allowed for cloudflare-workers"))
-		}
-		if environment.APIProfile != "" {
-			issues = append(issues, issue(service, prefix+"apiProfile", "is only allowed for cloudflare-workers"))
-		}
-		return issues
-	}
-	if name != EnvironmentProduction {
-		issues = append(issues, issue(service, prefix+"kind", "cloudflare-workers is only allowed for production"))
-	}
-	if environment.Host != "" {
-		issues = append(issues, issue(service, prefix+"host", "is not allowed for cloudflare-workers"))
-	}
-	if environment.Root != "" {
-		issues = append(issues, issue(service, prefix+"root", "is not allowed for cloudflare-workers"))
-	}
-	if environment.Runner != RunnerManual {
-		issues = append(issues, issue(service, prefix+"runner", "must be manual for cloudflare-workers"))
-	}
-	if !cloudflareWorkerPattern.MatchString(environment.Worker) {
-		issues = append(issues, issue(service, prefix+"worker", "must be a safe Cloudflare Worker name"))
-	}
-	if !cloudflareAccountIDPattern.MatchString(environment.AccountID) {
-		issues = append(issues, issue(service, prefix+"accountId", "must be a 32 lowercase hexadecimal character Cloudflare account ID"))
-	}
-	config := filepath.Clean(environment.WranglerConfig)
-	if environment.WranglerConfig == "" || strings.ContainsAny(environment.WranglerConfig, "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x7f") || filepath.IsAbs(environment.WranglerConfig) || config != environment.WranglerConfig || config == "." || config == ".." || strings.HasPrefix(config, ".."+string(filepath.Separator)) {
-		issues = append(issues, issue(service, prefix+"wranglerConfig", "must be a clean relative path within the source root"))
-	}
-	if environment.APIProfile != "wrangler-4.107-preveal-v1" {
-		issues = append(issues, issue(service, prefix+"apiProfile", "must select a supported Cloudflare production API profile"))
-	}
 	return issues
 }
 
